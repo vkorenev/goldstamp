@@ -14,7 +14,15 @@ gradle-app.setting
 # Cache of project
 .gradletasknamecache
 
-# Eclipse Gradle plugin generated files
+# Kotlin plugin data
+.kotlin
+
+# IntelliJ IDEA
+.idea
+
+# mise-en-place local confil
+mise.local.toml
+
 # Eclipse Core
 .project
 # JDT-specific (Eclipse Java Development Tools)
