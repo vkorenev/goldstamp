@@ -1,0 +1,8 @@
+[versions]
+spotless = "8.10.3"
+# Last Google Java Format version compatible with the Java 17 build runtime.
+googleJavaFormat = "1.28.0"
+ktlint = "1.8.0"
+
+[plugins]
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
