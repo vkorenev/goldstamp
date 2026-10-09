@@ -1,6 +1,14 @@
 # GoldStamp
 
-Golden Master Testing Framework for Java
+GoldStamp is a snapshot testing library for building test coverage around captured output,
+such as REST API responses. You hand it a document, optionally apply rules that sanitize
+volatile parts, and it compares the result with a manually approved snapshot file:
+
+- **Missing or different:** the test fails and the actual output is written to a
+  `*.received.<ext>` file for you to review.
+- **Approved:** you copy the received file over the approved one. GoldStamp never writes
+  approved files itself.
+- **Matching:** the test passes and any stale received file is removed.
 
 ## License
 
