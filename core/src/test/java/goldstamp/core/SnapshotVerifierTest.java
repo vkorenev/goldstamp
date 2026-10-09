@@ -34,6 +34,12 @@ class SnapshotVerifierTest {
     verifier = builder.build();
   }
 
+  private static final DocumentComparator<String> EQUAL_DOCUMENTS =
+      (expected, actual) ->
+          expected.equals(actual)
+              ? ComparisonResult.matching()
+              : ComparisonResult.different("documents differ");
+
   /** Approves the received output, as a developer would after reviewing it. */
   private static void approve(VerificationResult.Missing missing) throws IOException {
     Files.copy(missing.receivedFile(), missing.approvedFile());
@@ -73,11 +79,7 @@ class SnapshotVerifierTest {
   void missingApproveMatchDifferentWorkflowWithRulesAppliedOnlyToIncomingDocuments(
       boolean compareDocuments) throws IOException {
     if (compareDocuments) {
-      builder.documentComparator(
-          (expected, actual) ->
-              expected.equals(actual)
-                  ? ComparisonResult.matching()
-                  : ComparisonResult.different("documents differ"));
+      builder.documentComparator(EQUAL_DOCUMENTS);
     }
     var transforming = builder.build().appendTransformer(text -> text.toLowerCase() + "!");
 
@@ -113,19 +115,14 @@ class SnapshotVerifierTest {
   }
 
   @Test
-  void trailingNewlineDifferenceIsNamedInTheDiagnostic() throws IOException {
+  void onlyAMissingTrailingNewlineIsNamedInTheDiagnostic() throws IOException {
     Files.writeString(directory.resolve("nl.approved.txt"), "a\n");
-    var different =
+    var missingNewline =
         assertInstanceOf(VerificationResult.Different.class, verifier.verify("nl", "a"));
-    assertThat(different.differences(), containsString("<no trailing newline>"));
-  }
-
-  @Test
-  void extraBlankLineIsNotReportedAsMissingTrailingNewline() throws IOException {
-    Files.writeString(directory.resolve("blank.approved.txt"), "a\n");
-    var different =
-        assertInstanceOf(VerificationResult.Different.class, verifier.verify("blank", "a\n\n"));
-    assertThat(different.differences(), not(containsString("<no trailing newline>")));
+    assertThat(missingNewline.differences(), containsString("<no trailing newline>"));
+    var extraBlankLine =
+        assertInstanceOf(VerificationResult.Different.class, verifier.verify("nl", "a\n\n"));
+    assertThat(extraBlankLine.differences(), not(containsString("<no trailing newline>")));
   }
 
   @Test
@@ -164,14 +161,7 @@ class SnapshotVerifierTest {
     assertInstanceOf(VerificationResult.Different.class, textComparing.verify("edit", "hello"));
 
     // Document comparison parses the approval ("hello") and compares it with the actual document.
-    var documentComparing =
-        codecBuilder
-            .documentComparator(
-                (expected, actual) ->
-                    expected.equals(actual)
-                        ? ComparisonResult.matching()
-                        : ComparisonResult.different("documents differ"))
-            .build();
+    var documentComparing = codecBuilder.documentComparator(EQUAL_DOCUMENTS).build();
     assertInstanceOf(VerificationResult.Matching.class, documentComparing.verify("edit", "hello"));
     // The actual document is not normalized by a codec round trip, despite identical output text.
     assertInstanceOf(VerificationResult.Different.class, documentComparing.verify("edit", "HELLO"));
