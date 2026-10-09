@@ -208,6 +208,20 @@ class SnapshotVerifierTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"", ".json", "json ", "../x", "a/b", "a\\b", "a:b", "a|b", "a\nb"})
+  void rejectsCodecExtensionsThatBreakFileNames(String extension) {
+    var codec = new goldstamp.core.text.TextSnapshotCodec(extension);
+    assertThrows(IllegalArgumentException.class, () -> SnapshotVerifier.builder(codec).build());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"json", "tar.gz", "c++", "x_y-z", "a b", "é"})
+  void acceptsAnyCodecExtensionUsableInAFileName(String extension) {
+    var codec = new goldstamp.core.text.TextSnapshotCodec(extension);
+    SnapshotVerifier.builder(codec).build();
+  }
+
   @Test
   void ruleFailurePropagatesUnchanged() {
     var originalFailure = new IllegalArgumentException("bad custom rule");
