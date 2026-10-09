@@ -12,7 +12,12 @@ import java.io.IOException;
  * @param <T> the document type
  */
 public interface SnapshotCodec<T> {
-  /** Snapshot file suffix; letters and digits only, e.g. "json". */
+  /**
+   * Snapshot file suffix, e.g. "json", "tar.gz" or "c++". Must be usable in a file name: non-empty,
+   * not starting with a dot (write "json", not ".json") or ending with a space, with no path
+   * separators, control characters or any of {@code : * ? " < > |}. Checked when a verifier is
+   * built with the codec.
+   */
   String extension();
 
   /** Serializes a document to the text stored in the snapshot file. Never returns null. */

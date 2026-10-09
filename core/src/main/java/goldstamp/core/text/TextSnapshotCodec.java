@@ -16,8 +16,8 @@ public final class TextSnapshotCodec implements SnapshotCodec<String> {
   }
 
   /**
-   * A codec writing snapshot files with the given extension, which must be letters and digits only;
-   * this is checked when a verifier is built with the codec.
+   * A codec writing snapshot files with the given extension; see {@link SnapshotCodec#extension()}
+   * for what is valid. This is checked when a verifier is built with the codec.
    */
   public TextSnapshotCodec(String extension) {
     this.extension = Objects.requireNonNull(extension, "extension");

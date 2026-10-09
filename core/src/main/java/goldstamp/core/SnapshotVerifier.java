@@ -45,6 +45,13 @@ public final class SnapshotVerifier<T> {
 
   private static final Pattern SNAPSHOT_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
 
+  /**
+   * Anything but path separators, control characters and characters Windows forbids in names; no
+   * leading dot, since the verifier adds the separating one, and no trailing space.
+   */
+  private static final Pattern EXTENSION =
+      Pattern.compile("(?!\\.)[^\\p{Cntrl}/\\\\:*?\"<>|]*[^\\p{Cntrl}/\\\\:*?\"<>| ]");
+
   private final Path approvedDirectory;
   private final Path receivedDirectory;
   private final SnapshotCodec<T> codec;
@@ -63,7 +70,7 @@ public final class SnapshotVerifier<T> {
     this.codec = codec;
     this.transformers = transformers;
     this.comparison = comparison;
-    this.extension = Objects.requireNonNull(codec.extension(), "extension");
+    this.extension = requireValidExtension(codec.extension());
   }
 
   private SnapshotVerifier(Builder<T> builder) {
@@ -220,6 +227,18 @@ public final class SnapshotVerifier<T> {
       throw new SnapshotException("Cannot delete stale received snapshot " + received, failure);
     }
     return new VerificationResult.Matching(snapshotId, approved);
+  }
+
+  private static String requireValidExtension(String extension) {
+    Objects.requireNonNull(extension, "extension");
+    if (!EXTENSION.matcher(extension).matches()) {
+      throw new IllegalArgumentException(
+          "Invalid codec extension '"
+              + extension
+              + "': must be non-empty, not start with a dot or end with a space, and contain no path separators,"
+              + " control characters or any of : * ? \" < > |");
+    }
+    return extension;
   }
 
   private static <T> Comparison<T> textComparison(TextComparator comparator) {
