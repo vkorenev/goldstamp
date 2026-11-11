@@ -1,2 +1,2 @@
-/** Plain-text snapshots: a pass-through codec and a factory for ready-made verifier builders. */
+/** Plain-text snapshots: {@link goldstamp.core.text.TextFormat}. */
 package goldstamp.core.text;

@@ -5,9 +5,11 @@ import java.util.Objects;
 /**
  * Transforms an incoming document. Never applied to approved snapshots.
  *
- * <p>The first transformer receives the document passed to {@code verify}; each subsequent
- * transformer receives the preceding result. A transformer that mutates its input must copy it
- * first. GoldStamp's own engines copy.
+ * <p>In a verifier, the first transformer receives the document produced by {@link
+ * SnapshotFormat#toDocument}, which is the verifier's own copy; each subsequent transformer
+ * receives the preceding result. Transformers may mutate their input or return a replacement root,
+ * and must ensure any nodes they introduce are safe for subsequent transformers to mutate. Outside
+ * a verifier, callers must copy first if their document needs to stay unchanged.
  *
  * @param <T> the document type
  */
