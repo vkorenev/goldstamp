@@ -143,8 +143,7 @@ class SnapshotVerifierTest {
     var baseBuilder = normalizingBuilder().with(text -> text + "-a");
     var base = baseBuilder.build();
     baseBuilder.with(text -> text + "-ignored"); // Already-built verifiers keep their chain.
-    DocumentTransformer<String> b = text -> text + "-b";
-    var chained = base.with(b.andThen(text -> text + "-c"), text -> text + "-d");
+    var chained = base.with(text -> text + "-b", text -> text + "-c", text -> text + "-d");
 
     var missing = assertInstanceOf(VerificationResult.Missing.class, chained.verify("chain", "x"));
     assertEquals("x-a-b-c-d\n", Files.readString(missing.receivedFile()));
@@ -240,21 +239,28 @@ class SnapshotVerifierTest {
   }
 
   @Test
-  void copiesTheDocumentOnlyBeforeTheFirstInPlaceTransformer() {
+  void copiesOnlyWhenAnInPlaceTransformerReceivesADocumentThatIsNotPrivate() {
     DocumentTransformer<String> pure = DocumentTransformer.pure(text -> text + "!");
+    DocumentTransformer<String> fresh = DocumentTransformer.fresh(text -> text + "~");
+    DocumentTransformer<String> inPlace = text -> text + "?";
 
     normalizingBuilder().build().verify("none", "x");
-    normalizingBuilder().with(pure, pure.andThen(pure)).build().verify("pure", "x");
+    normalizingBuilder().with(pure, fresh).build().verify("pure", "x");
     assertEquals(0, normalizing.copies.get());
 
-    normalizingBuilder()
-        .with(pure, text -> text + "?", text -> text + "#")
-        .build()
-        .verify("m", "x");
+    normalizingBuilder().with(pure, inPlace, inPlace).build().verify("one", "x");
     assertEquals(1, normalizing.copies.get());
 
-    normalizingBuilder().copyInputs(false).with(text -> text + "?").build().verify("own", "x");
-    assertEquals(1, normalizing.copies.get());
+    // A pure result may be shared, so it is copied again; a fresh one is not.
+    normalizingBuilder().with(inPlace, pure, inPlace).build().verify("shared", "x");
+    assertEquals(3, normalizing.copies.get());
+    normalizingBuilder().with(inPlace, fresh, inPlace).build().verify("fresh", "x");
+    assertEquals(4, normalizing.copies.get());
+    normalizingBuilder().with(fresh, inPlace).build().verify("fresh-first", "x");
+    assertEquals(4, normalizing.copies.get());
+
+    normalizingBuilder().copyInputs(false).with(pure, inPlace).build().verify("own", "x");
+    assertEquals(4, normalizing.copies.get());
   }
 
   @Test

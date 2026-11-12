@@ -14,10 +14,16 @@ var snapshots = json.verifier()
     .build();
 ```
 
-A transformer may mutate its input or return a new root. The verifier copies the document
-before the first transformer that may mutate it. If yours never mutates its input, create it
-with `DocumentTransformer.pure(fn)` so that the copy can be skipped. Any nodes it adds must be safe for
+A transformer may mutate its input or return a new root. Any nodes it adds must be safe for
 later transformers to mutate. Transformers never see approved snapshots.
+
+The verifier copies the document before an in-place transformer receives one that is not yet
+private. Lambdas and rules are in place. To let the verifier skip copies, declare the effect:
+
+| Create with | Promise | Result |
+| --- | --- | --- |
+| `DocumentTransformer.pure(fn)` | Never mutates its argument. | May be shared; copied before the next in-place transformer. |
+| `DocumentTransformer.fresh(fn)` | Never mutates its argument. | A new object, safe to mutate; not copied. |
 
 ## Custom comparators
 

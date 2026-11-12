@@ -133,7 +133,7 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
     /**
      * Appends transformers, applied in order to each incoming document, after {@link
      * SnapshotFormat#copy copying} the document if any of them works {@linkplain
-     * DocumentTransformer#inPlace() in place}; never to approved snapshots.
+     * DocumentTransformer#effect() in place}; never to approved snapshots.
      */
     @SafeVarargs
     public final Builder<T> with(DocumentTransformer<T>... more) {
@@ -185,9 +185,10 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
   }
 
   /**
-   * Verifies a document. The transformers run in order; before the first one that works in place,
-   * the format copies the document, so {@code actual} and approved files are never modified unless
-   * {@link Builder#copyInputs} is {@code false}. With no such transformer, nothing is copied.
+   * Verifies a document. The transformers run in order; before an in-place one receives a document
+   * that is not yet private, the format copies it, so {@code actual} and approved files are never
+   * modified unless {@link Builder#copyInputs} is {@code false}. With no such transformer, nothing
+   * is copied.
    *
    * @see Verifier#verify for the parameters and exceptions
    */
@@ -203,9 +204,11 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
     Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
     Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
     T current = actual;
+    // Whether current is private to this verification, so in-place transformers may mutate it.
     boolean owned = !copyInputs;
     for (DocumentTransformer<T> transformer : transformers) {
-      if (!owned && transformer.inPlace()) {
+      DocumentTransformer.Effect effect = transformer.effect();
+      if (!owned && effect == DocumentTransformer.Effect.IN_PLACE) {
         current = Objects.requireNonNull(format.copy(current), "Copied document");
         owned = true;
       }
@@ -218,6 +221,11 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
                       + " returned null for snapshot '"
                       + snapshotId
                       + "'");
+      if (effect == DocumentTransformer.Effect.PURE) {
+        owned = !copyInputs; // The result may be shared.
+      } else if (effect == DocumentTransformer.Effect.PURE_FRESH) {
+        owned = true;
+      }
     }
     T transformedDocument = current;
     Supplier<String> actualText = memoize(() -> serialize(transformedDocument));
