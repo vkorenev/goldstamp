@@ -31,3 +31,8 @@ tasks.withType<Test>().configureEach {
 tasks.withType<Javadoc>().configureEach {
     (options as StandardJavadocDocletOptions).addBooleanOption("Xdoclint:all,-missing", true)
 }
+
+// Run doclint as part of `build`, so Javadoc errors fail CI.
+tasks.named("check") {
+    dependsOn(tasks.named("javadoc"))
+}

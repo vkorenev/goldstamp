@@ -1,22 +1,67 @@
 # GoldStamp
 
-GoldStamp is a snapshot testing library for building test coverage around captured output,
-such as REST API responses. You hand it a document, optionally apply rules that sanitize
-volatile parts, and it compares the result with a manually approved snapshot file:
+Snapshot testing for Java. Pass in a POJO or a JSON tree, such as a parsed REST response.
+Rules you declare strip volatile parts, such as timestamps and IDs, and GoldStamp compares the
+result with a snapshot file you approved by hand.
 
-- **Missing or different:** the test fails and the actual output is written to a
-  `*.received.<ext>` file for you to review.
-- **Approved:** you copy the received file over the approved one. GoldStamp never writes
-  approved files itself.
-- **Matching:** the test passes and any stale received file is removed.
+## Quick start
+
+GoldStamp is not published yet. Inside this build, add `testImplementation(project(":jackson3-json"))`.
+
+```java
+var json = JacksonJson.defaults();
+var snapshots = json.verifier()
+    .with(
+        json.remove("$.generatedAt"),
+        json.replace("$.requestId", "<request-id>"),
+        json.remove("$.debug").optional(),
+        json.sort("$.items", "id"))
+    .build();
+
+snapshots.contramap(json::toTree).assertMatches("orders", order);  // a POJO, record or Map
+snapshots.assertMatches("raw", json.parse(responseBody));          // or a JsonNode
+```
+
+1. **First run.** The test fails and writes `build/snapshots/received/orders.received.json`.
+2. **Approve.** Review that file, copy it to `src/test/snapshots/approved/orders.approved.json`
+   and commit it. GoldStamp never writes approved files itself.
+3. **Later runs.** A match passes. A difference fails with the first differing line and writes
+   a fresh received file.
+
+## Rules
+
+| To | Write |
+| --- | --- |
+| Remove values | `json.remove("$.items[*].timestamp")` |
+| Remove array elements | `json.remove("$.items[?(@.temporary == true)]")` |
+| Replace values (any Java value) | `json.replace("$.token", "<token>")` |
+| Compute a replacement | `json.transform("$.name", n -> json.toTree(n.asString().trim()))` |
+| Sort an array | `json.sort("$.tags")` |
+| Sort by keys | `json.sort("$.people", "name.last", "name.first")` |
+| Sort with a comparator | `json.sort("$.items", Comparator.comparing(n -> n.get("name").asString()))` |
+| Tolerate no match | `json.remove("$.debug").optional()` |
+
+Rules run in order. A rule that matches nothing fails the test unless it is `.optional()`.
+
+## More
+
+- `verifier.with(rules...)` returns an extended copy of a shared verifier.
+- `verifier.contramap(fn)` returns a verifier for another input type, e.g. `Verifier<Order>`.
+- `verify(id, input)` returns a `VerificationResult` instead of throwing.
+- To change the JSON layout or naming, use
+  `JacksonJson.of(JacksonJson.defaultMapper().rebuild()...build())`.
+- `new TextFormat("md").verifier().build()` handles plain-text snapshots.
+
+The guides cover the rest:
+
+- [User guide](docs/guide.md) covers configuration, rule details, JsonPath limitations,
+  comparison and errors.
+- [Extending GoldStamp](docs/extending.md) covers custom formats, other JSON libraries,
+  transformers and comparators.
+- [Design](docs/design.md) explains how GoldStamp works and why.
+- [Contributing](CONTRIBUTING.md) covers building and submitting changes.
 
 ## License
 
-This project is licensed under either of
-
-- [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) ([`LICENSE-APACHE`](LICENSE-APACHE))
-- [MIT license](https://opensource.org/licenses/MIT) ([`LICENSE-MIT`](LICENSE-MIT))
-
-at your option.
-
-The [SPDX](https://spdx.dev) license identifier for this project is `MIT OR Apache-2.0`.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your
+option (`MIT OR Apache-2.0`).

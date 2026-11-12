@@ -1,10 +1,10 @@
 package goldstamp.core.spi;
 
 /**
- * Compares the parsed approved snapshot with the transformed actual document, without serializing
- * and reloading the actual operand. Must not mutate its operands or apply the transformer.
- * Implementations must account for representation changes caused by the codec if approval is to
- * produce a match.
+ * Compares the parsed approved snapshot with the transformed actual document. The actual document
+ * is not serialized first, so implementations must tolerate representation changes that
+ * serialization causes (e.g. numeric node types), or approving the received file will not produce a
+ * match. Must not mutate either operand.
  *
  * @param <T> the document type
  */
@@ -13,7 +13,7 @@ public interface DocumentComparator<T> {
   /**
    * Compares the two documents.
    *
-   * @param approved the approved file's text, parsed by {@link SnapshotCodec#deserialize}
+   * @param approved the approved file's text, parsed by {@link SnapshotFormat#deserialize}
    * @param actual the transformed incoming document
    */
   ComparisonResult compare(T approved, T actual);

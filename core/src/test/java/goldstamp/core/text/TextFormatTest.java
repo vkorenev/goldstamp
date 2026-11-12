@@ -11,20 +11,24 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-class TextSnapshotsTest {
+class TextFormatTest {
   @TempDir Path directory;
 
   @Test
   void missingApproveMatchDifferentWorkflowKeepsTextVerbatim() throws IOException {
     var verifier =
-        TextSnapshots.builder("log")
+        new TextFormat("log")
+            .verifier()
             .approvedDirectory(directory)
             .receivedDirectory(directory)
             .build();
 
     var missing =
         assertInstanceOf(
-            VerificationResult.Missing.class, verifier.verify("run", "Hello\n  World"));
+            VerificationResult.Missing.class,
+            verifier
+                .<CharSequence>contramap(CharSequence::toString)
+                .verify("run", new StringBuilder("Hello\n  World")));
     assertThat(missing.receivedFile().getFileName().toString(), endsWith(".received.log"));
     assertEquals("Hello\n  World", Files.readString(missing.receivedFile()));
 

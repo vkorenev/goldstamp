@@ -1,13 +1,32 @@
 # Contributing
 
-Run `./gradlew build` before submitting changes. This builds the project, runs
-tests, and checks formatting, as it does in CI.
+Thanks for helping! Skim [docs/design.md](docs/design.md) for the big picture first.
 
-## Formatting
+## Build
 
-Formatting uses Spotless with Google Java Format for Java and ktlint for Kotlin
-sources and Gradle Kotlin scripts, including those in `build-logic`. Formatting
-configuration lives in the root `build.gradle.kts`.
+GoldStamp needs Java 17. CI runs the same build:
 
-Run `./gradlew spotlessApply` from the repository root to format files, or
-`./gradlew spotlessCheck` to check formatting without changing files.
+```sh
+./gradlew build          # compile, test, check Javadoc and formatting
+./gradlew spotlessApply  # fix formatting
+```
+
+## Tests
+
+We like tests that read like usage examples. A good test:
+- creates a verifier;
+- runs it through missing, approve, match and different;
+- shows the input JSON next to the expected output.
+
+`SnapshotWorkflowTest` is the model to follow.
+
+## Docs
+
+Keep docs short and put each topic in one place:
+
+| File | For |
+| --- | --- |
+| `README.md` | New users: quick start and a rules cheat sheet |
+| `docs/guide.md` | Users: everything else about using GoldStamp |
+| `docs/extending.md` | Writing your own formats, transformers and comparators |
+| `docs/design.md` | How GoldStamp works and why |

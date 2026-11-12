@@ -8,29 +8,32 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
-import goldstamp.core.spi.SnapshotCodec;
-import goldstamp.core.text.TextSnapshots;
+import goldstamp.core.spi.DocumentTransformer;
+import goldstamp.core.spi.SnapshotFormat;
+import goldstamp.core.text.TextFormat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class SnapshotVerifierTest {
   @TempDir Path directory;
 
-  /** Pass-through text builder over {@link #directory}; tests reconfigure it as needed. */
+  /** Plain-text builder over {@link #directory}; tests reconfigure it as needed. */
   private SnapshotVerifier.Builder<String> builder;
 
-  /** The default verifier: pass-through text codec, line-by-line text comparison. */
+  /** The default verifier: plain-text format, line-by-line text comparison. */
   private SnapshotVerifier<String> verifier;
 
   @BeforeEach
   void createVerifier() {
-    builder = TextSnapshots.builder().approvedDirectory(directory).receivedDirectory(directory);
+    builder = new TextFormat().verifier().approvedDirectory(directory).receivedDirectory(directory);
     verifier = builder.build();
   }
 
@@ -45,21 +48,31 @@ class SnapshotVerifierTest {
     Files.copy(missing.receivedFile(), missing.approvedFile());
   }
 
-  /** Builder with the {@link NormalizingTextCodec} over {@link #directory}. */
+  private final NormalizingTextFormat normalizing = new NormalizingTextFormat();
+
+  /** Builder with the {@link NormalizingTextFormat} over {@link #directory}. */
   private SnapshotVerifier.Builder<String> normalizingBuilder() {
-    return SnapshotVerifier.builder(new NormalizingTextCodec())
+    return SnapshotVerifier.builder(normalizing)
         .approvedDirectory(directory)
         .receivedDirectory(directory);
   }
 
   /**
    * Documents are strings; the snapshot is the lower-cased, stripped text plus a newline, and
-   * snapshots containing "invalid" cannot be read.
+   * snapshots containing "invalid" cannot be read. Counts copies.
    */
-  private static class NormalizingTextCodec implements SnapshotCodec<String> {
+  private static class NormalizingTextFormat implements SnapshotFormat<String> {
+    final AtomicInteger copies = new AtomicInteger();
+
     @Override
     public String extension() {
       return "txt";
+    }
+
+    @Override
+    public String copy(String document) {
+      copies.incrementAndGet();
+      return document;
     }
 
     @Override
@@ -68,8 +81,8 @@ class SnapshotVerifierTest {
     }
 
     @Override
-    public String deserialize(String snapshot) throws IOException {
-      if (snapshot.contains("invalid")) throw new IOException("invalid snapshot");
+    public String deserialize(String snapshot) {
+      if (snapshot.contains("invalid")) throw new IllegalStateException("invalid snapshot");
       return snapshot.strip().toLowerCase();
     }
   }
@@ -81,7 +94,7 @@ class SnapshotVerifierTest {
     if (compareDocuments) {
       builder.documentComparator(EQUAL_DOCUMENTS);
     }
-    var transforming = builder.build().appendTransformer(text -> text.toLowerCase() + "!");
+    var transforming = builder.with(text -> text.toLowerCase() + "!").build();
 
     var missing =
         assertInstanceOf(
@@ -126,16 +139,20 @@ class SnapshotVerifierTest {
   }
 
   @Test
-  void appendedTransformersRunInOrderAndLeaveTheOriginalVerifierUnchanged() throws IOException {
-    var chained =
-        verifier.appendTransformer(text -> text + "-a").appendTransformer(text -> text + "-b");
+  void derivedVerifiersAppendTransformersAndLeaveTheOriginalUnchanged() throws IOException {
+    var baseBuilder = normalizingBuilder().with(text -> text + "-a");
+    var base = baseBuilder.build();
+    baseBuilder.with(text -> text + "-ignored"); // Already-built verifiers keep their chain.
+    var chained = base.with(text -> text + "-b", text -> text + "-c", text -> text + "-d");
 
     var missing = assertInstanceOf(VerificationResult.Missing.class, chained.verify("chain", "x"));
-    assertEquals("x-a-b", Files.readString(missing.receivedFile()));
+    assertEquals("x-a-b-c-d\n", Files.readString(missing.receivedFile()));
+    assertEquals(1, normalizing.copies.get()); // The input is copied once per verify.
     approve(missing);
     assertInstanceOf(VerificationResult.Matching.class, chained.verify("chain", "x"));
     // The original verifier is unchanged.
-    assertInstanceOf(VerificationResult.Different.class, verifier.verify("chain", "x"));
+    assertInstanceOf(VerificationResult.Different.class, base.verify("chain", "x"));
+    assertEquals(3, normalizing.copies.get());
   }
 
   @Test
@@ -151,25 +168,24 @@ class SnapshotVerifierTest {
   @Test
   void textComparisonPreservesApprovalEditsWhileDocumentComparisonUsesActualDirectly()
       throws IOException {
-    // A hand-edited approval: the codec would serialize "hello\n" for the same document.
+    // A hand-edited approval: the format would serialize "hello\n" for the same document.
     Path approved = directory.resolve("edit.approved.txt");
     Files.writeString(approved, "  HELLO  \n\n\n");
-    var codecBuilder = normalizingBuilder();
+    var formatBuilder = normalizingBuilder();
 
     // Text comparison uses the approved file verbatim, so the edits are significant.
-    var textComparing = codecBuilder.build();
+    var textComparing = formatBuilder.build();
     assertInstanceOf(VerificationResult.Different.class, textComparing.verify("edit", "hello"));
 
     // Document comparison parses the approval ("hello") and compares it with the actual document.
-    var documentComparing = codecBuilder.documentComparator(EQUAL_DOCUMENTS).build();
+    var documentComparing = formatBuilder.documentComparator(EQUAL_DOCUMENTS).build();
     assertInstanceOf(VerificationResult.Matching.class, documentComparing.verify("edit", "hello"));
-    // The actual document is not normalized by a codec round trip, despite identical output text.
+    // The actual document is not normalized by a format round trip, despite identical output text.
     assertInstanceOf(VerificationResult.Different.class, documentComparing.verify("edit", "HELLO"));
     assertEquals("hello\n", Files.readString(directory.resolve("edit.received.txt")));
     assertInstanceOf(VerificationResult.Matching.class, documentComparing.verify("edit", "hello"));
     assertFalse(Files.exists(directory.resolve("edit.received.txt")));
     assertEquals("  HELLO  \n\n\n", Files.readString(approved));
-    assertInstanceOf(VerificationResult.Different.class, textComparing.verify("edit", "hello"));
   }
 
   @Test
@@ -199,6 +215,7 @@ class SnapshotVerifierTest {
   }
 
   @ParameterizedTest
+  @NullSource
   @ValueSource(strings = {"", "..", "../escape", "/tmp/escape", "a/b", "a\\b", "C:\\escape", "."})
   void rejectsUnsafeSnapshotIds(String id) throws IOException {
     assertThrows(IllegalArgumentException.class, () -> verifier.verify(id, "x"));
@@ -210,23 +227,64 @@ class SnapshotVerifierTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"", ".json", "json ", "../x", "a/b", "a\\b", "a:b", "a|b", "a\nb"})
-  void rejectsCodecExtensionsThatBreakFileNames(String extension) {
-    var codec = new goldstamp.core.text.TextSnapshotCodec(extension);
-    assertThrows(IllegalArgumentException.class, () -> SnapshotVerifier.builder(codec).build());
+  void rejectsFormatExtensionsThatBreakFileNames(String extension) {
+    var format = new TextFormat(extension);
+    assertThrows(IllegalArgumentException.class, () -> format.verifier().build());
   }
 
   @ParameterizedTest
   @ValueSource(strings = {"json", "tar.gz", "c++", "x_y-z", "a b", "é"})
-  void acceptsAnyCodecExtensionUsableInAFileName(String extension) {
-    var codec = new goldstamp.core.text.TextSnapshotCodec(extension);
-    SnapshotVerifier.builder(codec).build();
+  void acceptsAnyFormatExtensionUsableInAFileName(String extension) {
+    new TextFormat(extension).verifier().build();
+  }
+
+  @Test
+  void copiesOnlyWhenAnInPlaceTransformerReceivesADocumentThatIsNotPrivate() {
+    DocumentTransformer<String> pure = DocumentTransformer.pure(text -> text + "!");
+    DocumentTransformer<String> fresh = DocumentTransformer.fresh(text -> text + "~");
+    DocumentTransformer<String> inPlace = text -> text + "?";
+
+    normalizingBuilder().build().verify("none", "x");
+    normalizingBuilder().with(pure, fresh).build().verify("pure", "x");
+    assertEquals(0, normalizing.copies.get());
+
+    normalizingBuilder().with(pure, inPlace, inPlace).build().verify("one", "x");
+    assertEquals(1, normalizing.copies.get());
+
+    // A pure result may be shared, so it is copied again; a fresh one is not.
+    normalizingBuilder().with(inPlace, pure, inPlace).build().verify("shared", "x");
+    assertEquals(3, normalizing.copies.get());
+    normalizingBuilder().with(inPlace, fresh, inPlace).build().verify("fresh", "x");
+    assertEquals(4, normalizing.copies.get());
+    normalizingBuilder().with(fresh, inPlace).build().verify("fresh-first", "x");
+    assertEquals(4, normalizing.copies.get());
+
+    normalizingBuilder().copyInputs(false).with(pure, inPlace).build().verify("own", "x");
+    assertEquals(4, normalizing.copies.get());
+  }
+
+  @Test
+  void contramapVerifiesMappedInputs() throws IOException {
+    Verifier<Integer> numbers = verifier.contramap(n -> "N=" + n);
+    Verifier<String> digits = numbers.contramap(Integer::valueOf);
+
+    var missing = assertInstanceOf(VerificationResult.Missing.class, digits.verify("num", "42"));
+    assertEquals("N=42", Files.readString(missing.receivedFile()));
+    approve(missing);
+    numbers.assertMatches("num", 42);
+    assertThrows(AssertionError.class, () -> numbers.assertMatches("num", 43));
+
+    var failure =
+        assertThrows(
+            NullPointerException.class, () -> verifier.contramap(n -> null).verify("bad", 1));
+    assertThat(failure.getMessage(), containsString("returned null for snapshot 'bad'"));
   }
 
   @Test
   void ruleFailurePropagatesUnchanged() {
     var originalFailure = new IllegalArgumentException("bad custom rule");
     var failing =
-        verifier.appendTransformer(
+        verifier.with(
             text -> {
               throw originalFailure;
             });
@@ -241,9 +299,8 @@ class SnapshotVerifierTest {
   void nullTransformerResultIsRejected() {
     NullPointerException failure =
         assertThrows(
-            NullPointerException.class,
-            () -> verifier.appendTransformer(text -> null).verify("bad", "hello"));
-    assertThat(failure.getMessage(), containsString("Transformed document"));
+            NullPointerException.class, () -> verifier.with(text -> null).verify("bad", "hello"));
+    assertThat(failure.getMessage(), containsString("returned null for snapshot 'bad'"));
   }
 
   @Test
@@ -259,7 +316,7 @@ class SnapshotVerifierTest {
     assertThat(
         failure.getMessage(), containsString(directory.resolve("bad.approved.txt").toString()));
     assertThat(failure.getCause().getMessage(), containsString("invalid snapshot"));
-    assertInstanceOf(IOException.class, failure.getCause());
+    assertInstanceOf(IllegalStateException.class, failure.getCause());
     assertEquals("invalid", Files.readString(directory.resolve("bad.approved.txt")));
   }
 

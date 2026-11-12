@@ -3,7 +3,7 @@ package goldstamp.core;
 import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
 import goldstamp.core.spi.DocumentTransformer;
-import goldstamp.core.spi.SnapshotCodec;
+import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.spi.TextComparator;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -12,31 +12,32 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * Verifies documents against approved snapshot files. Create one with {@link #builder}, which
- * builds a verifier without transformers; {@link #appendTransformer} derives a new verifier with
- * one more. Configuration is fixed after construction. Concurrent verifications require distinct
- * snapshot IDs and thread-safe codecs, transformers, and comparators. Snapshot IDs are single file
+ * Verifies documents against approved snapshot files. Create one with {@link #builder}; {@link
+ * #with} derives a new verifier with more transformers, and {@link #contramap} one for another
+ * input type. Configuration is fixed after construction. Concurrent verifications require distinct
+ * snapshot IDs and thread-safe formats, transformers, and comparators. Snapshot IDs are single file
  * names.
  *
  * <p>Each {@link #verify} call writes a {@code *.received.<ext>} file when the snapshot is missing
  * or different, and deletes a stale one when it matches. Approved files are never written.
  *
  * <pre>{@code
- * var base = SnapshotVerifier.builder(codec).build();
- * var snapshots = base.appendTransformer(transformer);
+ * var snapshots = SnapshotVerifier.builder(format).with(transformer).build();
  * snapshots.assertMatches("orders", document);
+ * snapshots.contramap(Order::toDocument).assertMatches("order-1", order);
  * }</pre>
  *
  * @param <T> the document type
  */
-public final class SnapshotVerifier<T> {
-  /** Compares text or documents without round-tripping either operand through the codec. */
+public final class SnapshotVerifier<T> implements Verifier<T> {
+  /** Compares text or documents without round-tripping either operand through the format. */
   @FunctionalInterface
   private interface Comparison<T> {
     ComparisonResult compare(
@@ -54,54 +55,50 @@ public final class SnapshotVerifier<T> {
 
   private final Path approvedDirectory;
   private final Path receivedDirectory;
-  private final SnapshotCodec<T> codec;
+  private final SnapshotFormat<T> format;
   private final List<DocumentTransformer<T>> transformers;
   private final Comparison<T> comparison;
   private final String extension;
+  private final boolean copyInputs;
 
   private SnapshotVerifier(
       Path approvedDirectory,
       Path receivedDirectory,
-      SnapshotCodec<T> codec,
+      SnapshotFormat<T> format,
       List<DocumentTransformer<T>> transformers,
-      Comparison<T> comparison) {
+      Comparison<T> comparison,
+      boolean copyInputs) {
+    this.copyInputs = copyInputs;
     this.approvedDirectory = approvedDirectory;
     this.receivedDirectory = receivedDirectory;
-    this.codec = codec;
+    this.format = format;
     this.transformers = transformers;
     this.comparison = comparison;
-    this.extension = requireValidExtension(codec.extension());
-  }
-
-  private SnapshotVerifier(Builder<T> builder) {
-    this(
-        builder.approvedDirectory.toAbsolutePath().normalize(),
-        builder.receivedDirectory.toAbsolutePath().normalize(),
-        builder.codec,
-        List.of(),
-        builder.comparison);
+    this.extension = requireValidExtension(format.extension());
   }
 
   /**
-   * Returns a new verifier that applies {@code next} after this verifier's transformers. This
-   * verifier is unchanged.
-   */
-  public SnapshotVerifier<T> appendTransformer(DocumentTransformer<T> next) {
-    Objects.requireNonNull(next, "next");
-    var chain = new ArrayList<>(transformers);
-    chain.add(next);
-    return new SnapshotVerifier<>(
-        approvedDirectory, receivedDirectory, codec, List.copyOf(chain), comparison);
-  }
-
-  /**
-   * Starts a verifier for documents persisted by {@code codec}. Defaults: approved files in {@code
+   * Starts a verifier for documents of {@code format}. Defaults: approved files in {@code
    * src/test/snapshots/approved}, received files in {@code build/snapshots/received} (both relative
-   * to the working directory, matching the Gradle project layout), no transformers, and {@link
-   * LineComparator} text comparison.
+   * to the working directory), no transformers, and {@link LineComparator} text comparison.
    */
-  public static <T> Builder<T> builder(SnapshotCodec<T> codec) {
-    return new Builder<>(codec);
+  public static <T> Builder<T> builder(SnapshotFormat<T> format) {
+    return new Builder<>(format);
+  }
+
+  /**
+   * Returns a new verifier that applies {@code more} after this verifier's transformers, so a
+   * shared base verifier can be extended per test. This verifier is unchanged.
+   */
+  @SafeVarargs
+  public final SnapshotVerifier<T> with(DocumentTransformer<T>... more) {
+    return new SnapshotVerifier<>(
+        approvedDirectory,
+        receivedDirectory,
+        format,
+        append(transformers, more),
+        comparison,
+        copyInputs);
   }
 
   /**
@@ -110,13 +107,15 @@ public final class SnapshotVerifier<T> {
    * @param <T> the document type
    */
   public static final class Builder<T> {
-    private final SnapshotCodec<T> codec;
+    private final SnapshotFormat<T> format;
     private Path approvedDirectory = Path.of("src/test/snapshots/approved");
     private Path receivedDirectory = Path.of("build/snapshots/received");
+    private List<DocumentTransformer<T>> transformers = List.of();
     private Comparison<T> comparison = textComparison(new LineComparator());
+    private boolean copyInputs = true;
 
-    private Builder(SnapshotCodec<T> codec) {
-      this.codec = Objects.requireNonNull(codec, "codec");
+    private Builder(SnapshotFormat<T> format) {
+      this.format = Objects.requireNonNull(format, "format");
     }
 
     /** Where manually approved snapshots live. GoldStamp never writes here. */
@@ -132,13 +131,25 @@ public final class SnapshotVerifier<T> {
     }
 
     /**
+     * Appends transformers, applied in order to each incoming document, after {@link
+     * SnapshotFormat#copy copying} the document if any of them works {@linkplain
+     * DocumentTransformer#effect() in place}; never to approved snapshots.
+     */
+    @SafeVarargs
+    public final Builder<T> with(DocumentTransformer<T>... more) {
+      this.transformers = append(transformers, more);
+      return this;
+    }
+
+    /**
      * Compares the parsed approval with the transformed actual document directly. The comparator
      * must account for any representation changes caused by serialization. Replaces any earlier
-     * comparator. If the codec cannot read an approved file, {@link #verify} throws {@link
+     * comparator. If the format cannot read an approved file, {@link #verify} throws {@link
      * SnapshotException} naming that file.
      */
     public Builder<T> documentComparator(DocumentComparator<? super T> comparator) {
-      this.comparison = documentComparison(codec, Objects.requireNonNull(comparator, "comparator"));
+      this.comparison =
+          documentComparison(format, Objects.requireNonNull(comparator, "comparator"));
       return this;
     }
 
@@ -151,42 +162,37 @@ public final class SnapshotVerifier<T> {
       return this;
     }
 
+    /**
+     * Whether to copy a document before the first in-place transformer modifies it (default {@code
+     * true}). Pass {@code false} only when every input may be modified, e.g. because it was just
+     * built for the verification; the caller's object then changes.
+     */
+    public Builder<T> copyInputs(boolean copy) {
+      this.copyInputs = copy;
+      return this;
+    }
+
     /** Creates the verifier. */
     public SnapshotVerifier<T> build() {
-      return new SnapshotVerifier<>(this);
+      return new SnapshotVerifier<>(
+          approvedDirectory.toAbsolutePath().normalize(),
+          receivedDirectory.toAbsolutePath().normalize(),
+          format,
+          transformers,
+          comparison,
+          copyInputs);
     }
   }
 
   /**
-   * Verifies a document and throws if it does not match its approved snapshot. A missing or
-   * different snapshot fails with an {@link AssertionError} carrying {@link
-   * VerificationResult#diagnostic()}; use {@link #verify} to inspect the result instead.
+   * Verifies a document. The transformers run in order; before an in-place one receives a document
+   * that is not yet private, the format copies it, so {@code actual} and approved files are never
+   * modified unless {@link Builder#copyInputs} is {@code false}. With no such transformer, nothing
+   * is copied.
    *
-   * @throws AssertionError if the snapshot is missing or different
-   * @see #verify for the other exceptions
+   * @see Verifier#verify for the parameters and exceptions
    */
-  public void assertMatches(String snapshotId, T actual) {
-    VerificationResult result = verify(snapshotId, actual);
-    if (!result.matches()) {
-      throw new AssertionError(result.diagnostic());
-    }
-  }
-
-  /**
-   * Verifies a document. Transformers run on the incoming document only; approved files are never
-   * modified. GoldStamp's own rule engines do not mutate {@code actual}.
-   *
-   * <p>A mismatch or missing approval is reported through the returned {@link VerificationResult},
-   * not an exception.
-   *
-   * @param snapshotId the snapshot's file name stem; letters, digits, {@code .}, {@code _} and
-   *     {@code -}, starting with a letter or digit
-   * @param actual the document to verify; not modified
-   * @throws IllegalArgumentException if {@code snapshotId} is not a valid ID
-   * @throws SnapshotException if a snapshot file cannot be read, written, deleted or parsed, or the
-   *     codec cannot serialize the document
-   * @throws RuntimeException whatever a configured transformer or comparator throws, unchanged
-   */
+  @Override
   public VerificationResult verify(String snapshotId, T actual) {
     Objects.requireNonNull(actual, "actual");
     if (snapshotId == null || !SNAPSHOT_ID.matcher(snapshotId).matches()) {
@@ -198,8 +204,28 @@ public final class SnapshotVerifier<T> {
     Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
     Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
     T current = actual;
+    // Whether current is private to this verification, so in-place transformers may mutate it.
+    boolean owned = !copyInputs;
     for (DocumentTransformer<T> transformer : transformers) {
-      current = Objects.requireNonNull(transformer.apply(current), "Transformed document");
+      DocumentTransformer.Effect effect = transformer.effect();
+      if (!owned && effect == DocumentTransformer.Effect.IN_PLACE) {
+        current = Objects.requireNonNull(format.copy(current), "Copied document");
+        owned = true;
+      }
+      current =
+          Objects.requireNonNull(
+              transformer.apply(current),
+              () ->
+                  "Transformer "
+                      + transformer
+                      + " returned null for snapshot '"
+                      + snapshotId
+                      + "'");
+      if (effect == DocumentTransformer.Effect.PURE) {
+        owned = !copyInputs; // The result may be shared.
+      } else if (effect == DocumentTransformer.Effect.PURE_FRESH) {
+        owned = true;
+      }
     }
     T transformedDocument = current;
     Supplier<String> actualText = memoize(() -> serialize(transformedDocument));
@@ -229,11 +255,18 @@ public final class SnapshotVerifier<T> {
     return new VerificationResult.Matching(snapshotId, approved);
   }
 
+  private static <T> List<DocumentTransformer<T>> append(
+      List<DocumentTransformer<T>> transformers, DocumentTransformer<T>[] more) {
+    var chain = new ArrayList<>(transformers);
+    chain.addAll(Arrays.asList(more));
+    return List.copyOf(chain); // Rejects null elements.
+  }
+
   private static String requireValidExtension(String extension) {
     Objects.requireNonNull(extension, "extension");
     if (!EXTENSION.matcher(extension).matches()) {
       throw new IllegalArgumentException(
-          "Invalid codec extension '"
+          "Invalid format extension '"
               + extension
               + "': must be non-empty, not start with a dot or end with a space, and contain no path separators,"
               + " control characters or any of : * ? \" < > |");
@@ -247,15 +280,15 @@ public final class SnapshotVerifier<T> {
   }
 
   private static <T> Comparison<T> documentComparison(
-      SnapshotCodec<T> codec, DocumentComparator<? super T> comparator) {
+      SnapshotFormat<T> format, DocumentComparator<? super T> comparator) {
     return (approved, approvedText, actual, actualText) ->
-        comparator.compare(parseApproved(codec, approved, approvedText), actual);
+        comparator.compare(parseApproved(format, approved, approvedText), actual);
   }
 
-  private static <T> T parseApproved(SnapshotCodec<T> codec, Path approved, String approvedText) {
+  private static <T> T parseApproved(SnapshotFormat<T> format, Path approved, String approvedText) {
     try {
-      return Objects.requireNonNull(codec.deserialize(approvedText), "Approved document");
-    } catch (IOException | RuntimeException failure) {
+      return Objects.requireNonNull(format.deserialize(approvedText), "Approved document");
+    } catch (RuntimeException failure) {
       throw new SnapshotException("Cannot parse approved snapshot " + approved, failure);
     }
   }
@@ -276,11 +309,7 @@ public final class SnapshotVerifier<T> {
   }
 
   private String serialize(T document) {
-    try {
-      return Objects.requireNonNull(codec.serialize(document), "Snapshot text");
-    } catch (IOException failure) {
-      throw new SnapshotException("Cannot serialize document", failure);
-    }
+    return Objects.requireNonNull(format.serialize(document), "Snapshot text");
   }
 
   private static void writeReceived(Path file, String text) {
