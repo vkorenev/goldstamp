@@ -1,8 +1,8 @@
 package goldstamp.core.spi;
 
 /**
- * Everything that depends on a document model: the snapshot file extension, conversion of the
- * caller's input into a working document, and conversion between documents and snapshot text.
+ * Everything that depends on a document model: the snapshot file extension, copying of documents,
+ * and conversion between documents and snapshot text.
  *
  * <p>When invoked by {@code SnapshotVerifier}, exceptions from {@link #deserialize} are reported as
  * a {@code SnapshotException} naming the approved file; exceptions from the other methods propagate
@@ -20,12 +20,11 @@ public interface SnapshotFormat<T> {
   String extension();
 
   /**
-   * Converts the caller's input into a fresh document that transformers may mutate without
-   * affecting {@code input}. A mutable document must be copied; an immutable one may be returned as
-   * is. Throws {@link IllegalArgumentException} for an input type the format does not support;
-   * failures converting a supported type may propagate as the underlying library's exceptions.
+   * Returns a copy of {@code document} that transformers may mutate without affecting the original.
+   * A mutable document must be deep-copied; an immutable one may be returned as is. Never returns
+   * null.
    */
-  T toDocument(Object input);
+  T copy(T document);
 
   /** Serializes a document to the text stored in the snapshot file. Never returns null. */
   String serialize(T document);

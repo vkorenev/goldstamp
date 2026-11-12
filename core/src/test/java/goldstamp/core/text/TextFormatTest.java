@@ -26,7 +26,9 @@ class TextFormatTest {
     var missing =
         assertInstanceOf(
             VerificationResult.Missing.class,
-            verifier.verify("run", new StringBuilder("Hello\n  World")));
+            verifier
+                .<CharSequence>contramap(CharSequence::toString)
+                .verify("run", new StringBuilder("Hello\n  World")));
     assertThat(missing.receivedFile().getFileName().toString(), endsWith(".received.log"));
     assertEquals("Hello\n  World", Files.readString(missing.receivedFile()));
 
@@ -36,7 +38,5 @@ class TextFormatTest {
 
     assertInstanceOf(VerificationResult.Different.class, verifier.verify("run", "hello\n  World"));
     assertEquals("hello\n  World", Files.readString(missing.receivedFile()));
-
-    assertThrows(IllegalArgumentException.class, () -> verifier.verify("run", 42));
   }
 }

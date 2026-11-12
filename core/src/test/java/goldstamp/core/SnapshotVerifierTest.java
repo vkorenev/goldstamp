@@ -59,10 +59,10 @@ class SnapshotVerifierTest {
 
   /**
    * Documents are strings; the snapshot is the lower-cased, stripped text plus a newline, and
-   * snapshots containing "invalid" cannot be read. Counts input conversions.
+   * snapshots containing "invalid" cannot be read. Counts copies.
    */
   private static class NormalizingTextFormat implements SnapshotFormat<String> {
-    final AtomicInteger conversions = new AtomicInteger();
+    final AtomicInteger copies = new AtomicInteger();
 
     @Override
     public String extension() {
@@ -70,9 +70,9 @@ class SnapshotVerifierTest {
     }
 
     @Override
-    public String toDocument(Object input) {
-      conversions.incrementAndGet();
-      return (String) input;
+    public String copy(String document) {
+      copies.incrementAndGet();
+      return document;
     }
 
     @Override
@@ -148,12 +148,12 @@ class SnapshotVerifierTest {
 
     var missing = assertInstanceOf(VerificationResult.Missing.class, chained.verify("chain", "x"));
     assertEquals("x-a-b-c-d\n", Files.readString(missing.receivedFile()));
-    assertEquals(1, normalizing.conversions.get()); // The input is converted once per verify.
+    assertEquals(1, normalizing.copies.get()); // The input is copied once per verify.
     approve(missing);
     assertInstanceOf(VerificationResult.Matching.class, chained.verify("chain", "x"));
     // The original verifier is unchanged.
     assertInstanceOf(VerificationResult.Different.class, base.verify("chain", "x"));
-    assertEquals(3, normalizing.conversions.get());
+    assertEquals(3, normalizing.copies.get());
   }
 
   @Test
@@ -237,6 +237,41 @@ class SnapshotVerifierTest {
   @ValueSource(strings = {"json", "tar.gz", "c++", "x_y-z", "a b", "é"})
   void acceptsAnyFormatExtensionUsableInAFileName(String extension) {
     new TextFormat(extension).verifier().build();
+  }
+
+  @Test
+  void copiesTheDocumentOnlyBeforeTheFirstInPlaceTransformer() {
+    DocumentTransformer<String> pure = DocumentTransformer.pure(text -> text + "!");
+
+    normalizingBuilder().build().verify("none", "x");
+    normalizingBuilder().with(pure, pure.andThen(pure)).build().verify("pure", "x");
+    assertEquals(0, normalizing.copies.get());
+
+    normalizingBuilder()
+        .with(pure, text -> text + "?", text -> text + "#")
+        .build()
+        .verify("m", "x");
+    assertEquals(1, normalizing.copies.get());
+
+    normalizingBuilder().copyInputs(false).with(text -> text + "?").build().verify("own", "x");
+    assertEquals(1, normalizing.copies.get());
+  }
+
+  @Test
+  void contramapVerifiesMappedInputs() throws IOException {
+    Verifier<Integer> numbers = verifier.contramap(n -> "N=" + n);
+    Verifier<String> digits = numbers.contramap(Integer::valueOf);
+
+    var missing = assertInstanceOf(VerificationResult.Missing.class, digits.verify("num", "42"));
+    assertEquals("N=42", Files.readString(missing.receivedFile()));
+    approve(missing);
+    numbers.assertMatches("num", 42);
+    assertThrows(AssertionError.class, () -> numbers.assertMatches("num", 43));
+
+    var failure =
+        assertThrows(
+            NullPointerException.class, () -> verifier.contramap(n -> null).verify("bad", 1));
+    assertThat(failure.getMessage(), containsString("returned null for snapshot 'bad'"));
   }
 
   @Test

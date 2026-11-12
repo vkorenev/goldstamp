@@ -20,9 +20,10 @@ import java.util.regex.Pattern;
 
 /**
  * Verifies documents against approved snapshot files. Create one with {@link #builder}; {@link
- * #with} derives a new verifier with more transformers. Configuration is fixed after construction.
- * Concurrent verifications require distinct snapshot IDs and thread-safe formats, transformers, and
- * comparators. Snapshot IDs are single file names.
+ * #with} derives a new verifier with more transformers, and {@link #contramap} one for another
+ * input type. Configuration is fixed after construction. Concurrent verifications require distinct
+ * snapshot IDs and thread-safe formats, transformers, and comparators. Snapshot IDs are single file
+ * names.
  *
  * <p>Each {@link #verify} call writes a {@code *.received.<ext>} file when the snapshot is missing
  * or different, and deletes a stale one when it matches. Approved files are never written.
@@ -30,11 +31,12 @@ import java.util.regex.Pattern;
  * <pre>{@code
  * var snapshots = SnapshotVerifier.builder(format).with(transformer).build();
  * snapshots.assertMatches("orders", document);
+ * snapshots.contramap(Order::toDocument).assertMatches("order-1", order);
  * }</pre>
  *
  * @param <T> the document type
  */
-public final class SnapshotVerifier<T> {
+public final class SnapshotVerifier<T> implements Verifier<T> {
   /** Compares text or documents without round-tripping either operand through the format. */
   @FunctionalInterface
   private interface Comparison<T> {
@@ -57,13 +59,16 @@ public final class SnapshotVerifier<T> {
   private final List<DocumentTransformer<T>> transformers;
   private final Comparison<T> comparison;
   private final String extension;
+  private final boolean copyInputs;
 
   private SnapshotVerifier(
       Path approvedDirectory,
       Path receivedDirectory,
       SnapshotFormat<T> format,
       List<DocumentTransformer<T>> transformers,
-      Comparison<T> comparison) {
+      Comparison<T> comparison,
+      boolean copyInputs) {
+    this.copyInputs = copyInputs;
     this.approvedDirectory = approvedDirectory;
     this.receivedDirectory = receivedDirectory;
     this.format = format;
@@ -88,7 +93,12 @@ public final class SnapshotVerifier<T> {
   @SafeVarargs
   public final SnapshotVerifier<T> with(DocumentTransformer<T>... more) {
     return new SnapshotVerifier<>(
-        approvedDirectory, receivedDirectory, format, append(transformers, more), comparison);
+        approvedDirectory,
+        receivedDirectory,
+        format,
+        append(transformers, more),
+        comparison,
+        copyInputs);
   }
 
   /**
@@ -102,6 +112,7 @@ public final class SnapshotVerifier<T> {
     private Path receivedDirectory = Path.of("build/snapshots/received");
     private List<DocumentTransformer<T>> transformers = List.of();
     private Comparison<T> comparison = textComparison(new LineComparator());
+    private boolean copyInputs = true;
 
     private Builder(SnapshotFormat<T> format) {
       this.format = Objects.requireNonNull(format, "format");
@@ -120,8 +131,9 @@ public final class SnapshotVerifier<T> {
     }
 
     /**
-     * Appends transformers, applied in order to each incoming document after {@link
-     * SnapshotFormat#toDocument}; never to approved snapshots.
+     * Appends transformers, applied in order to each incoming document, after {@link
+     * SnapshotFormat#copy copying} the document if any of them works {@linkplain
+     * DocumentTransformer#inPlace() in place}; never to approved snapshots.
      */
     @SafeVarargs
     public final Builder<T> with(DocumentTransformer<T>... more) {
@@ -150,6 +162,16 @@ public final class SnapshotVerifier<T> {
       return this;
     }
 
+    /**
+     * Whether to copy a document before the first in-place transformer modifies it (default {@code
+     * true}). Pass {@code false} only when every input may be modified, e.g. because it was just
+     * built for the verification; the caller's object then changes.
+     */
+    public Builder<T> copyInputs(boolean copy) {
+      this.copyInputs = copy;
+      return this;
+    }
+
     /** Creates the verifier. */
     public SnapshotVerifier<T> build() {
       return new SnapshotVerifier<>(
@@ -157,43 +179,20 @@ public final class SnapshotVerifier<T> {
           receivedDirectory.toAbsolutePath().normalize(),
           format,
           transformers,
-          comparison);
+          comparison,
+          copyInputs);
     }
   }
 
   /**
-   * Verifies a document and throws if it does not match its approved snapshot. A missing or
-   * different snapshot fails with an {@link AssertionError} carrying {@link
-   * VerificationResult#diagnostic()}; use {@link #verify} to inspect the result instead.
+   * Verifies a document. The transformers run in order; before the first one that works in place,
+   * the format copies the document, so {@code actual} and approved files are never modified unless
+   * {@link Builder#copyInputs} is {@code false}. With no such transformer, nothing is copied.
    *
-   * @throws AssertionError if the snapshot is missing or different
-   * @see #verify for the other exceptions
+   * @see Verifier#verify for the parameters and exceptions
    */
-  public void assertMatches(String snapshotId, Object actual) {
-    VerificationResult result = verify(snapshotId, actual);
-    if (!result.matches()) {
-      throw new AssertionError(result.diagnostic());
-    }
-  }
-
-  /**
-   * Verifies a document. The format converts {@code actual} into a fresh document, which the
-   * transformers then process; {@code actual} and approved files are never modified.
-   *
-   * <p>A mismatch or missing approval is reported through the returned {@link VerificationResult},
-   * not an exception.
-   *
-   * @param snapshotId the snapshot's file name stem; letters, digits, {@code .}, {@code _} and
-   *     {@code -}, starting with a letter or digit
-   * @param actual the input to verify, of any type the format accepts
-   * @throws IllegalArgumentException if {@code snapshotId} is not a valid ID, or the format rejects
-   *     the type of {@code actual}
-   * @throws NullPointerException if {@code actual} is null, or the format, a transformer or a
-   *     comparator returns null
-   * @throws SnapshotException if a snapshot file cannot be read, written, deleted or parsed
-   * @throws RuntimeException whatever the format, a transformer or a comparator throws, unchanged
-   */
-  public VerificationResult verify(String snapshotId, Object actual) {
+  @Override
+  public VerificationResult verify(String snapshotId, T actual) {
     Objects.requireNonNull(actual, "actual");
     if (snapshotId == null || !SNAPSHOT_ID.matcher(snapshotId).matches()) {
       throw new IllegalArgumentException(
@@ -203,8 +202,13 @@ public final class SnapshotVerifier<T> {
     }
     Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
     Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
-    T current = Objects.requireNonNull(format.toDocument(actual), "Converted document");
+    T current = actual;
+    boolean owned = !copyInputs;
     for (DocumentTransformer<T> transformer : transformers) {
+      if (!owned && transformer.inPlace()) {
+        current = Objects.requireNonNull(format.copy(current), "Copied document");
+        owned = true;
+      }
       current =
           Objects.requireNonNull(
               transformer.apply(current),

@@ -14,17 +14,17 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.NullNode;
 
 /**
- * JSON snapshots with Jackson 3. One {@link JsonMapper} drives everything: converting input
- * (Jackson trees are deep-copied; POJOs, records, maps and other values are converted with {@link
- * JsonMapper#valueToTree}, honoring Jackson annotations), writing and reading snapshot text, and
- * the JsonPath rules this format creates.
+ * JSON snapshots with Jackson 3. One {@link JsonMapper} drives everything: converting values to
+ * trees ({@link #toTree}: Jackson trees are deep-copied; POJOs, records, maps and other values are
+ * converted with {@link JsonMapper#valueToTree}, honoring Jackson annotations), writing and reading
+ * snapshot text, and the JsonPath rules this format creates.
  *
  * <pre>{@code
  * var json = JacksonJson.defaults();
  * var snapshots = json.verifier()
  *     .with(json.remove("$.generatedAt"), json.sort("$.items", "id"))
  *     .build();
- * snapshots.assertMatches("orders", orderResponse);
+ * snapshots.contramap(json::toTree).assertMatches("orders", orderResponse);
  * }</pre>
  *
  * <p>Snapshots are pretty-printed with the mapper's default pretty printer and end with a newline.
@@ -73,6 +73,11 @@ public final class JacksonJson extends JsonTreeFormat<JsonNode> {
       return node.deepCopy();
     }
     return mapper.valueToTree(value);
+  }
+
+  @Override
+  public JsonNode copy(JsonNode document) {
+    return document.deepCopy();
   }
 
   @Override

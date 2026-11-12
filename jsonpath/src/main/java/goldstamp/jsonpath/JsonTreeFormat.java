@@ -14,8 +14,9 @@ import java.util.function.UnaryOperator;
  * rules only with the format that created them.
  *
  * <p>To support a JSON library, subclass it with the library's JsonPath {@link JsonProvider} and
- * {@link MappingProvider}, and implement {@link #toTree}, {@link #extension}, {@link #serialize}
- * and {@link #deserialize}.
+ * {@link MappingProvider}, and implement {@link #toTree}, {@link #extension}, {@link #copy}, {@link
+ * #serialize} and {@link #deserialize}. To verify POJOs or other values, map them with {@code
+ * verifier.contramap(format::toTree)}.
  *
  * @param <T> the tree-node type of the provider
  */
@@ -35,24 +36,10 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
   /**
    * Converts any Java value into a fresh tree that is safe to mutate: a tree node is deep-copied;
    * POJOs, maps, collections, strings, numbers and booleans become the equivalent JSON; {@code
-   * null} becomes JSON null. Strings are JSON string values, never parsed.
+   * null} becomes JSON null. Strings are JSON string values, never parsed; to verify JSON text,
+   * read it with {@link #parse}.
    */
   public abstract T toTree(Object value);
-
-  /**
-   * As {@link #toTree}, except that a top-level {@link CharSequence} or {@code byte[]} is rejected:
-   * it is most likely unparsed JSON text, which {@link #parse} reads.
-   */
-  @Override
-  public final T toDocument(Object input) {
-    if (input instanceof CharSequence || input instanceof byte[]) {
-      throw new IllegalArgumentException(
-          "Got "
-              + input.getClass().getSimpleName()
-              + " input; to verify JSON text, parse it first with parse(text)");
-    }
-    return toTree(input);
-  }
 
   /** Parses JSON text into a tree, as approved snapshots are read. */
   public final T parse(String json) {

@@ -26,6 +26,7 @@ var orders = base.with(json.sort("$.items", "id"));  // base is unchanged
 - **Snapshot IDs** become file names: `<id>.approved.json` and `<id>.received.json`. An ID
   is letters, digits, `.`, `_` and `-`, and must start with a letter or digit.
 - **Concurrent tests** must use distinct IDs.
+- **`contramap`** gives a verifier for another input type; see [Input](#input).
 - **`assertMatches`** throws `AssertionError` on a missing or different snapshot.
 - **`verify`** returns a `VerificationResult`, which is one of `Matching`, `Missing` or
   `Different`:
@@ -35,14 +36,21 @@ var orders = base.with(json.sort("$.items", "id"));  // base is unchanged
 
 ## Input
 
-The format turns each input into a fresh document before any rule runs. Your object is
-never modified.
+A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with `contramap`:
 
-| Input | Becomes |
-| --- | --- |
-| `JsonNode` | A deep copy. |
-| POJO, record, `Map`, collection, number | The result of `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and other Jackson annotations. |
-| `String` (any `CharSequence`) or `byte[]` | Rejected with `IllegalArgumentException`, because it is probably unparsed JSON. Use `json.parse(text)` instead. |
+```java
+Verifier<Order> orders = base.contramap(json::toTree);  // POJO, record, Map, collection
+Verifier<String> bodies = base.contramap(json::parse);  // JSON text
+```
+
+- `toTree` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and other
+  Jackson annotations. A `JsonNode` is deep-copied.
+- The verifier copies the document before the first rule that changes it in place, so your
+  object is never modified. With no rules, or only
+  [`DocumentTransformer.pure`](extending.md#custom-transformers) ones, nothing is copied.
+- `copyInputs(false)` on the builder disables the copy. Rules then change the tree you pass
+  in, so use it only for trees built just for the verification.
+- `with(...)` exists only on `SnapshotVerifier`, so add rules before calling `contramap`.
 
 ## Configuring Jackson
 
@@ -144,8 +152,8 @@ structural diffs, a JSON diff library can do the comparison; check its Jackson 3
 | Problem | Exception | When it is thrown |
 | --- | --- | --- |
 | Invalid selector or sort key, function path, removing `$` | `IllegalArgumentException` | When the rule is created |
-| Invalid snapshot ID, text or `byte[]` input | `IllegalArgumentException` | When `verify` runs |
+| Invalid snapshot ID | `IllegalArgumentException` | When `verify` runs |
 | A rule cannot apply, e.g. `Rule remove($['debug']) matched no values` | `SnapshotException` naming the rule | When `verify` runs; no received file is written |
 | A snapshot file cannot be read, written or deleted, or (with a document comparator) parsed | `SnapshotException` naming the file | When `verify` runs |
-| `null` input, or a transformer or transform function returns `null` | `NullPointerException` | When `verify` runs |
-| The mapper cannot convert your input, or your own code throws | Their exception, unchanged | When `verify` runs |
+| `null` input, or a mapper, transformer or transform function returns `null` | `NullPointerException` | When `verify` runs |
+| Your mapper or other code throws | Its exception, unchanged | When `verify` runs |

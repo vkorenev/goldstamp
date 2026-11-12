@@ -6,7 +6,8 @@ import java.util.Objects;
 
 /**
  * Plain-text snapshots: the snapshot file holds the document text exactly as given, and reading
- * returns the file text unchanged. Accepts any {@link CharSequence} as input.
+ * returns the file text unchanged. Other inputs, such as a {@link CharSequence}, are converted with
+ * {@code contramap(Object::toString)}.
  *
  * <pre>{@code
  * var snapshots = new TextFormat("log").verifier().build();
@@ -41,12 +42,8 @@ public final class TextFormat implements SnapshotFormat<String> {
   }
 
   @Override
-  public String toDocument(Object input) {
-    if (input instanceof CharSequence text) {
-      return text.toString();
-    }
-    throw new IllegalArgumentException(
-        "Text snapshots need a CharSequence, got " + input.getClass().getName());
+  public String copy(String document) {
+    return document;
   }
 
   @Override

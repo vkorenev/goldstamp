@@ -12,6 +12,7 @@ import com.jayway.jsonpath.PathNotFoundException;
 import goldstamp.core.SnapshotException;
 import goldstamp.core.SnapshotVerifier;
 import goldstamp.core.VerificationResult;
+import goldstamp.core.Verifier;
 import goldstamp.jsonpath.JsonRule;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -158,10 +159,11 @@ class SnapshotWorkflowTest {
             .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
             .build();
     var format = JacksonJson.of(mapper);
-    var snapshots =
+    var trees =
         verifier(format)
             .with(
                 format.replace("$.request_id", "<request-id>"), format.sort("$.items", "item_id"));
+    Verifier<Order> snapshots = trees.contramap(format::toTree);
     var order = new Order(List.of(new Item(2, "Two", true), new Item(1, "One", false)), "req-7f3a");
 
     var missing = missing(snapshots.verify("pojo", order));
@@ -173,7 +175,7 @@ class SnapshotWorkflowTest {
     approve(missing);
     snapshots.assertMatches("pojo", new Order(order.items(), "req-other"));
     // A JsonNode with the same content matches too.
-    snapshots.assertMatches("pojo", format.toTree(order));
+    trees.assertMatches("pojo", format.toTree(order));
     assertInstanceOf(
         VerificationResult.Different.class,
         snapshots.verify("pojo", new Order(List.of(new Item(3, "Three", false)), "req-7f3a")));
@@ -202,13 +204,10 @@ class SnapshotWorkflowTest {
   }
 
   @Test
-  void jsonTextMustBeParsedFirst() throws IOException {
+  void parseReadsJsonTextAndRejectsInvalidText() throws IOException {
     String body =
         """
         {"a": 1}""";
-    var failure =
-        assertThrows(IllegalArgumentException.class, () -> baseVerifier.verify("t", body));
-    assertThat(failure.getMessage(), containsString("parse(text)"));
     assertReceived(body, baseVerifier.verify("t", JSON.parse(body)));
     assertThrows(StreamReadException.class, () -> JSON.parse("oops"));
     assertThrows(IllegalArgumentException.class, () -> JSON.parse(" "));

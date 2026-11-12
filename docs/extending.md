@@ -2,7 +2,7 @@
 
 The extension points live in `goldstamp.core.spi`. Their Javadoc is the full contract.
 There is no registry: pass your implementations to `SnapshotVerifier.builder(format)` and
-the builder methods.
+the builder methods. Input types are adapted with `Verifier.contramap`, not by formats.
 
 ## Custom transformers
 
@@ -14,7 +14,9 @@ var snapshots = json.verifier()
     .build();
 ```
 
-A transformer may mutate its input or return a new root. Any nodes it adds must be safe for
+A transformer may mutate its input or return a new root. The verifier copies the document
+before the first transformer that may mutate it. If yours never mutates its input, create it
+with `DocumentTransformer.pure(fn)` so that the copy can be skipped. Any nodes it adds must be safe for
 later transformers to mutate. Transformers never see approved snapshots.
 
 ## Custom comparators
@@ -36,7 +38,7 @@ Extend `goldstamp.jsonpath.JsonTreeFormat<T>`. Your subclass inherits the rules,
    them for Jackson 2, Gson, json-smart and Jakarta JSON.
 2. `toTree(Object)`, which deep-copies a tree node, converts any other value, and maps
    `null` to JSON null.
-3. `extension()`, `serialize` and `deserialize`.
+3. `extension()`, `copy`, `serialize` and `deserialize`.
 
 [`JacksonJson`](../jackson3-json/src/main/java/goldstamp/jackson3/json/JacksonJson.java) is
 the reference implementation. Only the Jackson 3 provider is tested.
@@ -48,7 +50,7 @@ Implement `SnapshotFormat<T>` directly:
 | Method | Contract |
 | --- | --- |
 | `extension()` | A file suffix such as `yaml` or `tar.gz`, with no leading dot. It is validated when the verifier is built. |
-| `toDocument(Object)` | Returns a fresh document that transformers may mutate. Throws `IllegalArgumentException` for unsupported input. |
+| `copy(T)` | Returns a copy that transformers may mutate; an immutable document may be returned as is. |
 | `serialize(T)` | Returns the snapshot text. |
 | `deserialize(String)` | Reads your own output and equivalent hand-edited text. |
 

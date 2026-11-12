@@ -18,8 +18,8 @@ var snapshots = json.verifier()
         json.sort("$.items", "id"))
     .build();
 
-snapshots.assertMatches("orders", order);                // a POJO, record, Map or JsonNode
-snapshots.assertMatches("raw", json.parse(responseBody)); // parse JSON text first
+snapshots.contramap(json::toTree).assertMatches("orders", order);  // a POJO, record or Map
+snapshots.assertMatches("raw", json.parse(responseBody));          // or a JsonNode
 ```
 
 1. **First run.** The test fails and writes `build/snapshots/received/orders.received.json`.
@@ -46,6 +46,7 @@ Rules run in order. A rule that matches nothing fails the test unless it is `.op
 ## More
 
 - `verifier.with(rules...)` returns an extended copy of a shared verifier.
+- `verifier.contramap(fn)` returns a verifier for another input type, e.g. `Verifier<Order>`.
 - `verify(id, input)` returns a `VerificationResult` instead of throwing.
 - To change the JSON layout or naming, use
   `JacksonJson.of(JacksonJson.defaultMapper().rebuild()...build())`.
