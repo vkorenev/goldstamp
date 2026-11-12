@@ -416,7 +416,10 @@ class SnapshotWorkflowTest {
                 .build());
     var result = missing(verifier(compact).verify("compact", document));
     assertEquals(
-        "{\"items\":[{\"id\":2},{\"id\":1}],\"z\":1}\n", Files.readString(result.receivedFile()));
+        """
+        {"items":[{"id":2},{"id":1}],"z":1}
+        """,
+        Files.readString(result.receivedFile()));
   }
 
   @Test
