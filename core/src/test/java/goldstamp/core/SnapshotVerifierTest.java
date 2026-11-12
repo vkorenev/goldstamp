@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
-import goldstamp.core.spi.DocumentTransformer;
 import goldstamp.core.spi.Mapping;
 import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.text.TextFormat;
@@ -93,8 +92,7 @@ class SnapshotVerifierTest {
     if (compareDocuments) {
       builder.documentComparator(EQUAL_DOCUMENTS);
     }
-    var transforming =
-        builder.with(DocumentTransformer.fresh(text -> text.toLowerCase() + "!")).build();
+    var transforming = builder.with(Mapping.unshared(text -> text.toLowerCase() + "!")).build();
 
     var missing =
         assertInstanceOf(
@@ -102,7 +100,7 @@ class SnapshotVerifierTest {
     assertEquals("hello!", Files.readString(missing.receivedFile()));
     assertFalse(Files.exists(missing.approvedFile()));
 
-    // Approve the received output. The transformer ran on the incoming document only, so a
+    // Approve the received output. The transformation ran on the incoming document only, so a
     // matching result also proves it was not applied again to the approved text.
     approve(missing);
     assertInstanceOf(VerificationResult.Matching.class, transforming.verify("greeting", "Hello"));
@@ -139,18 +137,18 @@ class SnapshotVerifierTest {
   }
 
   @Test
-  void prependedTransformersRunBeforeTheVerifiersOwnAndLeaveTheOriginalUnchanged()
+  void prependedTransformationsRunBeforeTheVerifiersOwnAndLeaveTheOriginalUnchanged()
       throws IOException {
-    var baseBuilder = normalizingBuilder().with(DocumentTransformer.fresh(text -> text + "-a"));
+    var baseBuilder = normalizingBuilder().with(Mapping.unshared(text -> text + "-a"));
     var base = baseBuilder.build();
     baseBuilder.with(
-        DocumentTransformer.fresh(text -> text + "-ignored")); // Built verifiers keep their chain.
+        Mapping.unshared(text -> text + "-ignored")); // Built verifiers keep their chain.
     var chained =
         base.prependTransformations(
             List.of(
-                DocumentTransformer.<String>fresh(text -> text + "-b"),
-                DocumentTransformer.<String>fresh(text -> text + "-c"),
-                DocumentTransformer.<String>fresh(text -> text + "-d")));
+                Mapping.<String, String>unshared(text -> text + "-b"),
+                Mapping.<String, String>unshared(text -> text + "-c"),
+                Mapping.<String, String>unshared(text -> text + "-d")));
 
     var missing = assertInstanceOf(VerificationResult.Missing.class, chained.verify("chain", "x"));
     assertEquals("x-b-c-d-a\n", Files.readString(missing.receivedFile()));
@@ -243,10 +241,10 @@ class SnapshotVerifierTest {
     new TextFormat(extension).verifier().build();
   }
 
-  /** Copies made while verifying "x" with a verifier built from the given transformers. */
-  private int copies(boolean handedOver, DocumentTransformer<String>... transformers) {
+  /** Copies made while verifying "x" with a verifier built from the given transformations. */
+  private int copies(boolean handedOver, Mapping<String, String>... transformations) {
     normalizing.copies.set(0);
-    var chain = normalizingBuilder().with(transformers).build();
+    var chain = normalizingBuilder().with(transformations).build();
     if (handedOver) {
       chain.verifyOwned("copies", "x");
     } else {
@@ -257,43 +255,55 @@ class SnapshotVerifierTest {
 
   @Test
   @SuppressWarnings("unchecked")
-  void copiesOnlyWhenAnInPlaceTransformerReceivesADocumentThatMayBeShared() {
-    var pure = DocumentTransformer.<String>pure(text -> text + "!");
-    var derived = DocumentTransformer.<String>derived(text -> text + "#");
-    var fresh = DocumentTransformer.<String>fresh(text -> text + "~");
-    var inPlace = DocumentTransformer.inPlace(text -> text + "?", normalizing::copy);
+  void copiesOnlyWhenAnInPlaceTransformationReceivesADocumentThatMayBeShared() {
+    var shared = Mapping.<String, String>shared(text -> text + "!");
+    var withSource = Mapping.<String, String>withSource(text -> text + "#");
+    var unshared = Mapping.<String, String>unshared(text -> text + "~");
+    var inPlace = Mapping.inPlace(text -> text + "?", normalizing::copy);
 
     assertEquals(0, copies(false));
-    assertEquals(0, copies(false, fresh, inPlace));
-    assertEquals(1, copies(false, pure, inPlace, inPlace));
+    assertEquals(0, copies(false, unshared, inPlace));
+    assertEquals(1, copies(false, shared, inPlace, inPlace));
     assertEquals(0, copies(true, inPlace, inPlace)); // The caller gave the document up.
-    assertEquals(1, copies(true, pure, inPlace)); // ...but a pure result may be shared.
-    assertEquals(0, copies(true, derived, inPlace)); // A derived one is built from it only.
-    assertEquals(1, copies(false, derived, inPlace)); // ...so it is the caller's own document.
-    assertEquals(2, copies(false, inPlace, pure, inPlace));
-    assertEquals(1, copies(false, inPlace, derived, inPlace));
-    assertEquals(1, copies(false, inPlace, fresh, inPlace));
+    assertEquals(1, copies(true, shared, inPlace)); // ...but a shared result may be shared.
+    assertEquals(0, copies(true, withSource, inPlace)); // A withSource one is built from it only.
+    assertEquals(1, copies(false, withSource, inPlace)); // ...so it is the caller's own document.
+    assertEquals(2, copies(false, inPlace, shared, inPlace));
+    assertEquals(1, copies(false, inPlace, withSource, inPlace));
+    assertEquals(1, copies(false, inPlace, unshared, inPlace));
   }
 
   @Test
-  void sharingFlowsThroughContramap() {
+  void sharingFlowsThroughPrependTransformation() {
     var rules =
-        normalizingBuilder()
-            .with(DocumentTransformer.inPlace(text -> text + "?", normalizing::copy))
-            .build();
+        normalizingBuilder().with(Mapping.inPlace(text -> text + "?", normalizing::copy)).build();
 
     normalizing.copies.set(0);
-    rules.contramap(Mapping.<Integer, String>fresh(n -> "N=" + n)).verify("fresh", 1);
+    rules
+        .prependTransformation(Mapping.<Integer, String>unshared(n -> "N=" + n))
+        .verify("fresh", 1);
     assertEquals(0, normalizing.copies.get()); // A fresh result is not referenced elsewhere.
 
-    rules.contramap(Mapping.<Integer, String>pure(n -> "N=" + n)).verify("shared", 1);
+    rules.prependTransformation(Mapping.<Integer, String>shared(n -> "N=" + n)).verify("shared", 1);
     assertEquals(1, normalizing.copies.get());
   }
 
   @Test
-  void contramapVerifiesMappedInputs() throws IOException {
-    Verifier<Integer> numbers = verifier.contramap(Mapping.<Integer, String>pure(n -> "N=" + n));
-    Verifier<String> digits = numbers.contramap(Mapping.<String, Integer>pure(Integer::valueOf));
+  void resultAssertMatchesThrowsUnlessTheSnapshotMatches() throws IOException {
+    var missing = verifier.verifyOwned("res", "x");
+    var failure = assertThrows(AssertionError.class, missing::assertMatches);
+    assertEquals(missing.diagnostic(), failure.getMessage());
+
+    approve(assertInstanceOf(VerificationResult.Missing.class, missing));
+    verifier.verifyOwned("res", "x").assertMatches();
+  }
+
+  @Test
+  void prependTransformationAdaptsTheInputType() throws IOException {
+    Verifier<Integer> numbers =
+        verifier.prependTransformation(Mapping.<Integer, String>shared(n -> "N=" + n));
+    Verifier<String> digits =
+        numbers.prependTransformation(Mapping.<String, Integer>shared(Integer::valueOf));
 
     var missing = assertInstanceOf(VerificationResult.Missing.class, digits.verify("num", "42"));
     assertEquals("N=42", Files.readString(missing.receivedFile()));
@@ -304,7 +314,10 @@ class SnapshotVerifierTest {
     var failure =
         assertThrows(
             NullPointerException.class,
-            () -> verifier.contramap(Mapping.<Integer, String>pure(n -> null)).verify("bad", 1));
+            () ->
+                verifier
+                    .prependTransformation(Mapping.<Integer, String>shared(n -> null))
+                    .verify("bad", 1));
     assertThat(failure.getMessage(), containsString("returned null for snapshot 'bad'"));
   }
 
@@ -312,8 +325,8 @@ class SnapshotVerifierTest {
   void ruleFailurePropagatesUnchanged() {
     var originalFailure = new IllegalArgumentException("bad custom rule");
     var failing =
-        verifier.prependTransformations(
-            DocumentTransformer.<String>pure(
+        verifier.prependTransformation(
+            Mapping.<String, String>shared(
                 text -> {
                   throw originalFailure;
                 }));
@@ -325,9 +338,9 @@ class SnapshotVerifierTest {
   }
 
   @Test
-  void nullTransformerResultNamesTheTransformerAndSnapshotWhereverItIsInTheChain() {
-    var nullReturning = DocumentTransformer.<String>pure(text -> null);
-    var other = DocumentTransformer.<String>pure(text -> text + "!");
+  void nullTransformationResultNamesTheTransformationAndSnapshotWhereverItIsInTheChain() {
+    var nullReturning = Mapping.<String, String>shared(text -> null);
+    var other = Mapping.<String, String>shared(text -> text + "!");
 
     for (var chain :
         List.of(

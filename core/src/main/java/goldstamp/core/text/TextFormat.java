@@ -7,7 +7,7 @@ import java.util.Objects;
 /**
  * Plain-text snapshots: the snapshot file holds the document text exactly as given, and reading
  * returns the file text unchanged. Other inputs, such as a {@link CharSequence}, are converted with
- * {@code contramap(Mapping.pure(Object::toString))}.
+ * {@code prependTransformation(Mapping.shared(Object::toString))}.
  *
  * <pre>{@code
  * var snapshots = new TextFormat("log").verifier().build();

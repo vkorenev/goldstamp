@@ -22,6 +22,17 @@ public sealed interface VerificationResult {
     return this instanceof Matching;
   }
 
+  /**
+   * Does nothing if the document matched its approved snapshot.
+   *
+   * @throws AssertionError carrying {@link #diagnostic()} if the snapshot is missing or different
+   */
+  default void assertMatches() {
+    if (!matches()) {
+      throw new AssertionError(diagnostic());
+    }
+  }
+
   /** The document matches the approved snapshot; any stale received file was deleted. */
   record Matching(String snapshotId, Path approvedFile) implements VerificationResult {
     public Matching {

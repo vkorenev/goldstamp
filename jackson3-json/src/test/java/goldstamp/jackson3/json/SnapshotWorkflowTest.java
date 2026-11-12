@@ -12,7 +12,6 @@ import com.jayway.jsonpath.PathNotFoundException;
 import goldstamp.core.SnapshotException;
 import goldstamp.core.VerificationResult;
 import goldstamp.core.Verifier;
-import goldstamp.core.spi.DocumentTransformer;
 import goldstamp.core.spi.Mapping;
 import goldstamp.jsonpath.JsonRule;
 import java.io.IOException;
@@ -118,7 +117,7 @@ class SnapshotWorkflowTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
-  void customTransformersAndRulesComposeWithoutMutatingTheCallersDocument(boolean customMapper)
+  void customTransformationsAndRulesComposeWithoutMutatingTheCallersDocument(boolean customMapper)
       throws IOException {
     var format = customMapper ? JacksonJson.of(new JsonMapper()) : JSON;
     var snapshots =
@@ -127,7 +126,7 @@ class SnapshotWorkflowTest {
             .approvedDirectory(directory)
             .receivedDirectory(directory)
             .with(
-                DocumentTransformer.inPlace(
+                Mapping.inPlace(
                     document -> {
                       ((ObjectNode) document).remove("secret");
                       return document;
@@ -135,7 +134,7 @@ class SnapshotWorkflowTest {
                     format::toTree),
                 format.remove("$.timestamp"))
             .build()
-            .prependTransformations(format.sort("$.items"));
+            .prependTransformation(format.sort("$.items"));
     JsonNode input =
         json(
             """
@@ -170,7 +169,7 @@ class SnapshotWorkflowTest {
                 List.of(
                     format.replace("$.request_id", "<request-id>"),
                     format.sort("$.items", "item_id")));
-    Verifier<Order> snapshots = trees.contramap(format.mapping());
+    Verifier<Order> snapshots = trees.prependTransformation(format.treeMapping());
     var order = new Order(List.of(new Item(2, "Two", true), new Item(1, "One", false)), "req-7f3a");
 
     var missing = missing(snapshots.verify("pojo", order));
@@ -224,7 +223,7 @@ class SnapshotWorkflowTest {
 
   @Test
   void verifyOwnedLetsRulesModifyTheTreeThatWasHandedOver() throws IOException {
-    var removing = baseVerifier.prependTransformations(JSON.remove("$.secret"));
+    var removing = baseVerifier.prependTransformation(JSON.remove("$.secret"));
     JsonNode kept =
         json(
             """
@@ -253,7 +252,7 @@ class SnapshotWorkflowTest {
 
   @Test
   void jsonTextIsVerifiedWithAParsingMapping() throws IOException {
-    Verifier<String> bodies = baseVerifier.contramap(Mapping.fresh(JSON::parse));
+    Verifier<String> bodies = baseVerifier.prependTransformation(Mapping.unshared(JSON::parse));
     assertReceived(
         """
         {"a": 1}""",
@@ -294,14 +293,13 @@ class SnapshotWorkflowTest {
     var failure =
         assertThrows(
             SnapshotException.class,
-            () -> baseVerifier.prependTransformations(rule).verify("required", json(input)));
+            () -> baseVerifier.prependTransformation(rule).verify("required", json(input)));
     assertEquals("Rule " + rule + " matched no values", failure.getMessage());
     assertInstanceOf(PathNotFoundException.class, failure.getCause());
     assertFalse(Files.exists(directory.resolve("received/required.received.json")));
 
     assertReceived(
-        input,
-        baseVerifier.prependTransformations(rule.optional()).verify("optional", json(input)));
+        input, baseVerifier.prependTransformation(rule.optional()).verify("optional", json(input)));
   }
 
   @ParameterizedTest
@@ -351,7 +349,7 @@ class SnapshotWorkflowTest {
             ? new PathNotFoundException("inside transform")
             : new IllegalStateException("inside transform");
     var failing =
-        baseVerifier.prependTransformations(
+        baseVerifier.prependTransformation(
             JSON.transform(
                     selector,
                     node -> {
@@ -376,7 +374,7 @@ class SnapshotWorkflowTest {
         """
         {"items": [1, 4]}""",
         baseVerifier
-            .prependTransformations(JSON.remove("$.items[0,2,3]"))
+            .prependTransformation(JSON.remove("$.items[0,2,3]"))
             .verify(
                 "indexes",
                 json(
@@ -396,14 +394,14 @@ class SnapshotWorkflowTest {
     assertReceived(
         """
         {"items": [{"name": "A"}, {"name": "B"}]}""",
-        baseVerifier.prependTransformations(uppercasing).verify("mapped", input));
+        baseVerifier.prependTransformation(uppercasing).verify("mapped", input));
     assertEquals(original, input);
 
     var nullReturning = JSON.transform("$.items", node -> null);
     var failure =
         assertThrows(
             NullPointerException.class,
-            () -> baseVerifier.prependTransformations(nullReturning).verify("bad", input));
+            () -> baseVerifier.prependTransformation(nullReturning).verify("bad", input));
     assertEquals("Rule " + nullReturning + " returned null", failure.getMessage());
   }
 
@@ -477,7 +475,7 @@ class SnapshotWorkflowTest {
 
   @Test
   void sortByKeyBreaksTiesOnTheWholeElementWhateverTheInputOrder() throws IOException {
-    var sorting = baseVerifier.prependTransformations(JSON.sort("$.items", "id"));
+    var sorting = baseVerifier.prependTransformation(JSON.sort("$.items", "id"));
     var expected =
         """
         {"items": [{"id": 0}, {"id": 1, "n": "a"}, {"id": 1, "n": "b"}]}""";
@@ -500,7 +498,7 @@ class SnapshotWorkflowTest {
   @Test
   void sortKeysUseNestedAndMultipleKeyPathsRelativeToEachElement() throws IOException {
     var sorting =
-        baseVerifier.prependTransformations(
+        baseVerifier.prependTransformation(
             JSON.sort("$.people", "$.name.last", "@.name.first", "age"));
     assertReceived(
         """
@@ -522,7 +520,7 @@ class SnapshotWorkflowTest {
 
   @Test
   void sortKeysMustExistAndBeSingleValuedPaths() {
-    var sorting = baseVerifier.prependTransformations(JSON.sort("$.people", "name").optional());
+    var sorting = baseVerifier.prependTransformation(JSON.sort("$.people", "name").optional());
     SnapshotException missingKey =
         assertThrows(
             SnapshotException.class,
@@ -540,7 +538,7 @@ class SnapshotWorkflowTest {
   @Test
   void sortWithComparatorReplacesTheDefaultKeyOrderAndTiesFallBackToIt() throws IOException {
     var caseInsensitive =
-        baseVerifier.prependTransformations(
+        baseVerifier.prependTransformation(
             JSON.sort("$.names", Comparator.comparing((JsonNode n) -> n.asString().toLowerCase())));
     assertReceived(
         """
@@ -553,7 +551,7 @@ class SnapshotWorkflowTest {
 
     var expected = new IllegalStateException("inside comparator");
     var failing =
-        baseVerifier.prependTransformations(
+        baseVerifier.prependTransformation(
             JSON.sort(
                 "$.names",
                 (a, b) -> {

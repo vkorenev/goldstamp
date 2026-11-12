@@ -17,7 +17,7 @@ import java.util.function.UnaryOperator;
  * <p>To support a JSON library, subclass it with the library's JsonPath {@link JsonProvider} and
  * {@link MappingProvider}, and implement {@link #toTree}, {@link #extension}, {@link #serialize}
  * and {@link #deserialize}. To verify POJOs or other values, map them with {@code
- * verifier.contramap(format.mapping())}.
+ * verifier.prependTransformation(format.treeMapping())}.
  *
  * @param <T> the tree-node type of the provider
  */
@@ -44,10 +44,10 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
 
   /**
    * A mapping from any Java value to a tree, as {@link #toTree}. Its result is fresh, so a verifier
-   * can modify it without copying: {@code snapshots.contramap(json.mapping())}.
+   * can modify it without copying: {@code snapshots.prependTransformation(json.treeMapping())}.
    */
-  public final Mapping<Object, T> mapping() {
-    return Mapping.fresh(this::toTree);
+  public final Mapping<Object, T> treeMapping() {
+    return Mapping.unshared(this::toTree);
   }
 
   /** Parses JSON text into a tree, as approved snapshots are read. */
@@ -77,6 +77,11 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
   /**
    * Replaces each selected value with the function's non-null result. The function receives the
    * live node and may mutate and return it, or return a new node, e.g. from {@link #toTree}.
+   *
+   * <p>Later rules and the verifier modify the result, so the function must not return an object
+   * that anything else references, such as a constant, a cached node or a node of another tree, and
+   * must not keep a reference to the node it receives or returns. Break either rule and unrelated
+   * tests can see modified data.
    */
   public final JsonRule<T> transform(String selector, UnaryOperator<T> function) {
     return new JsonRule<>(

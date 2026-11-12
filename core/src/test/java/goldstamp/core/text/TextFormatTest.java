@@ -28,7 +28,7 @@ class TextFormatTest {
         assertInstanceOf(
             VerificationResult.Missing.class,
             verifier
-                .contramap(Mapping.<CharSequence, String>pure(CharSequence::toString))
+                .prependTransformation(Mapping.<CharSequence, String>shared(CharSequence::toString))
                 .verify("run", new StringBuilder("Hello\n  World")));
     assertThat(missing.receivedFile().getFileName().toString(), endsWith(".received.log"));
     assertEquals("Hello\n  World", Files.readString(missing.receivedFile()));

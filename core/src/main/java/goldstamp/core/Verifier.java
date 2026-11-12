@@ -1,7 +1,6 @@
 package goldstamp.core;
 
 import goldstamp.core.spi.DocumentComparator;
-import goldstamp.core.spi.DocumentTransformer;
 import goldstamp.core.spi.Mapping;
 import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.spi.TextComparator;
@@ -13,18 +12,18 @@ import java.util.Objects;
 
 /**
  * Verifies inputs of type {@code I} against approved snapshot files. Start with {@link #builder},
- * then derive others: {@link #contramap} for another input type and {@link #prependTransformations}
- * for cleanup before verification. Derived verifiers leave this one unchanged. Concurrent
- * verifications require distinct snapshot IDs and thread-safe formats, transformers and
- * comparators.
+ * then derive others by prepending transformations: {@link #prependTransformation} adapts another
+ * input type, and {@link #prependTransformations} cleans up inputs of the same type. Derived
+ * verifiers leave this one unchanged. Concurrent verifications require distinct snapshot IDs and
+ * thread-safe formats, transformations and comparators.
  *
  * <p>Every verification writes a {@code *.received.<ext>} file when the snapshot is missing or
  * different, and deletes a stale one when it matches. Approved files are never written.
  *
  * <pre>{@code
- * Verifier<Doc> docs = Verifier.builder(format).with(transformer).build();
+ * Verifier<Doc> docs = Verifier.builder(format).with(transformation).build();
  * docs.assertMatches("orders", document);
- * Verifier<Order> orders = docs.contramap(Mapping.fresh(Order::toDocument));
+ * Verifier<Order> orders = docs.prependTransformation(Mapping.unshared(Order::toDocument));
  * orders.assertMatches("order-1", order);
  * }</pre>
  *
@@ -34,7 +33,7 @@ public interface Verifier<I> {
   /**
    * Starts a verifier for documents of {@code format}. Defaults: approved files in {@code
    * src/test/snapshots/approved}, received files in {@code build/snapshots/received} (both relative
-   * to the working directory), no transformers, and {@link LineComparator} text comparison.
+   * to the working directory), no transformations, and {@link LineComparator} text comparison.
    */
   static <T> Builder<T> builder(SnapshotFormat<T> format) {
     return new Builder<>(format);
@@ -47,16 +46,16 @@ public interface Verifier<I> {
    * @param snapshotId the snapshot's file name stem; letters, digits, {@code .}, {@code _} and
    *     {@code -}, starting with a letter or digit
    * @throws IllegalArgumentException if {@code snapshotId} is not a valid ID
-   * @throws NullPointerException if {@code actual} is null, or a mapping, format, transformer or
+   * @throws NullPointerException if {@code actual} is null, or a mapping, format, transformation or
    *     comparator returns null
    * @throws SnapshotException if a snapshot file cannot be read, written, deleted or parsed
-   * @throws RuntimeException whatever a mapping, format, transformer or comparator throws,
+   * @throws RuntimeException whatever a mapping, format, transformation or comparator throws,
    *     unchanged
    */
   VerificationResult verify(String snapshotId, I actual);
 
   /**
-   * As {@link #verify}, but the caller hands over {@code actual}, which transformers may modify
+   * As {@link #verify}, but the caller hands over {@code actual}, which transformations may modify
    * instead of copying. Use it for objects built just for the verification. If the verification
    * throws, {@code actual} may be left partly modified.
    */
@@ -68,23 +67,21 @@ public interface Verifier<I> {
    * @throws AssertionError carrying {@link VerificationResult#diagnostic()}
    */
   default void assertMatches(String snapshotId, I actual) {
-    VerificationResult result = verify(snapshotId, actual);
-    if (!result.matches()) {
-      throw new AssertionError(result.diagnostic());
-    }
+    verify(snapshotId, actual).assertMatches();
   }
 
   /**
-   * Returns a verifier of {@code U} that applies {@code mapping} to each input and verifies the
-   * result with this verifier, which may modify the result instead of copying it when the mapping's
-   * {@linkplain Mapping#resultSharing() result sharing} allows: it is unshared, or shared only with
-   * a source that {@link #verifyOwned} handed over. The mapping must return a non-null value; a
-   * null names the mapping and snapshot ID in a {@link NullPointerException}. Use {@link
-   * Mapping#pure}, {@link Mapping#derived} or {@link Mapping#fresh} for a plain function, by how
-   * its result is shared.
+   * Returns a verifier that runs {@code transformation} on each input before this verifier sees it.
+   * The transformation may change the input type, such as converting a POJO to a tree. This
+   * verifier may modify the result instead of copying it when the transformation's {@linkplain
+   * Mapping#resultSharing() result sharing} allows: it is unshared, or shared only with a source
+   * that {@link #verifyOwned} handed over. Later calls run first. The transformation must return a
+   * non-null value; a null names the transformation and snapshot ID in a {@link
+   * NullPointerException}. Create one from a function with {@link Mapping#shared}, {@link
+   * Mapping#withSource} or {@link Mapping#unshared}, by how its result is shared.
    */
-  default <U> Verifier<U> contramap(Mapping<? super U, ? extends I> mapping) {
-    Objects.requireNonNull(mapping, "mapping");
+  default <U> Verifier<U> prependTransformation(Mapping<? super U, ? extends I> transformation) {
+    Objects.requireNonNull(transformation, "transformation");
     Verifier<I> target = this;
     return new Verifier<>() {
       @Override
@@ -100,9 +97,14 @@ public interface Verifier<I> {
       private VerificationResult run(String snapshotId, U actual, boolean handedOver) {
         I mapped =
             Objects.requireNonNull(
-                mapping.apply(Objects.requireNonNull(actual, "actual"), handedOver),
-                () -> "Mapping " + mapping + " returned null for snapshot '" + snapshotId + "'");
-        Mapping.Sharing sharing = mapping.resultSharing();
+                transformation.apply(Objects.requireNonNull(actual, "actual"), handedOver),
+                () ->
+                    "Transformation "
+                        + transformation
+                        + " returned null for snapshot '"
+                        + snapshotId
+                        + "'");
+        Mapping.Sharing sharing = transformation.resultSharing();
         boolean mappedHandedOver =
             sharing == Mapping.Sharing.UNSHARED
                 || (sharing == Mapping.Sharing.WITH_SOURCE && handedOver);
@@ -114,25 +116,20 @@ public interface Verifier<I> {
   }
 
   /**
-   * Returns a verifier that applies {@code transformers} in order to each input before this
-   * verifier sees it. Later calls run first: {@code v.prependTransformations(a)
-   * .prependTransformations(b)} applies b, then a, then {@code v}'s own steps. Each transformer
-   * copies the document before modifying it, unless the caller handed it over and no earlier step
-   * may have shared it. A transformer that returns null is named in a {@link NullPointerException}
-   * with the snapshot ID.
+   * Returns a verifier that applies {@code transformations} in order to each input before this
+   * verifier sees it. Later calls run first: {@code v.prependTransformations(List.of(a))
+   * .prependTransformations(List.of(b))} applies b, then a, then {@code v}'s own steps. Each
+   * transformation copies the document before modifying it, unless the caller handed it over and no
+   * earlier step may have shared it. A transformation that returns null is named in a {@link
+   * NullPointerException} with the snapshot ID.
    */
-  default Verifier<I> prependTransformations(List<? extends DocumentTransformer<I>> transformers) {
-    List<? extends DocumentTransformer<I>> chain = List.copyOf(transformers);
+  default Verifier<I> prependTransformations(List<? extends Mapping<I, I>> transformations) {
+    List<? extends Mapping<I, I>> chain = List.copyOf(transformations);
     Verifier<I> result = this;
     for (int i = chain.size() - 1; i >= 0; i--) {
-      result = result.contramap(chain.get(i));
+      result = result.prependTransformation(chain.get(i));
     }
     return result;
-  }
-
-  /** As {@link #prependTransformations(List)} for a single transformer. */
-  default Verifier<I> prependTransformations(DocumentTransformer<I> transformer) {
-    return prependTransformations(List.of(transformer));
   }
 
   /**
@@ -144,7 +141,7 @@ public interface Verifier<I> {
     private final SnapshotFormat<T> format;
     private Path approvedDirectory = Path.of("src/test/snapshots/approved");
     private Path receivedDirectory = Path.of("build/snapshots/received");
-    private List<DocumentTransformer<T>> transformers = List.of();
+    private List<Mapping<T, T>> transformations = List.of();
     private SnapshotVerifier.Comparison<T> comparison =
         SnapshotVerifier.textComparison(new LineComparator());
 
@@ -165,15 +162,15 @@ public interface Verifier<I> {
     }
 
     /**
-     * Appends transformers, applied in order to each incoming document; never to approved
-     * snapshots. Each transformer copies the document before modifying it, unless the caller handed
-     * it over and no earlier step may have shared it.
+     * Appends transformations, applied in order to each incoming document; never to approved
+     * snapshots. Each transformation copies the document before modifying it, unless the caller
+     * handed it over and no earlier step may have shared it.
      */
     @SafeVarargs
-    public final Builder<T> with(DocumentTransformer<T>... more) {
-      var chain = new ArrayList<>(transformers);
+    public final Builder<T> with(Mapping<T, T>... more) {
+      var chain = new ArrayList<>(transformations);
       chain.addAll(Arrays.asList(more));
-      this.transformers = List.copyOf(chain); // Rejects null elements.
+      this.transformations = List.copyOf(chain); // Rejects null elements.
       return this;
     }
 
@@ -201,8 +198,8 @@ public interface Verifier<I> {
     }
 
     /**
-     * Creates the verifier, which applies the transformers in order to each input before comparing
-     * it.
+     * Creates the verifier, which applies the transformations in order to each input before
+     * comparing it.
      */
     public Verifier<T> build() {
       return new SnapshotVerifier<>(
@@ -210,7 +207,7 @@ public interface Verifier<I> {
               receivedDirectory.toAbsolutePath().normalize(),
               format,
               comparison)
-          .prependTransformations(transformers);
+          .prependTransformations(transformations);
     }
   }
 }

@@ -2,11 +2,11 @@
 
 The extension points live in `goldstamp.core.spi`. Their Javadoc is the full contract.
 There is no registry: pass your implementations to `Verifier.builder(format)` and
-the builder methods. Input types are adapted with `Verifier.contramap`, not by formats.
+the builder methods. Input types are adapted with `Verifier.prependTransformation`, not by formats.
 
-## Custom transformers
+## Custom transformations
 
-A `DocumentTransformer<T>` is a `Mapping<T, T>`: `apply(document, canModifySource)` plus
+A transformation is a `Mapping<T, T>`: `apply(document, canModifySource)` plus
 `resultSharing()`. To run a function on a whole JSON document, use `json.transform("$", fn)`:
 
 ```java
@@ -17,19 +17,19 @@ var snapshots = json.verifier()
 
 | Create with | Argument | Result |
 | --- | --- | --- |
-| `DocumentTransformer.inPlace(fn, copier)` | May be modified; `copier` copies it first unless the caller handed it over. | `UNSHARED`. |
-| `DocumentTransformer.pure(fn)` | Never modified. | `SHARED`: anything may reference it, so it is copied before an in-place step. |
-| `DocumentTransformer.derived(fn)` | Never modified. | `WITH_SOURCE`: the argument or a wrapper built from it, referenced by nothing else. |
-| `DocumentTransformer.fresh(fn)` | Never modified. | `UNSHARED`: a new object. |
+| `Mapping.inPlace(fn, copier)` | May be modified; `copier` copies it first unless the caller handed it over. | `UNSHARED`. |
+| `Mapping.shared(fn)` | Never modified. | `SHARED`: anything may reference it, so it is copied before an in-place step. |
+| `Mapping.withSource(fn)` | Never modified. | `WITH_SOURCE`: the argument or a wrapper built from it, referenced by nothing else. |
+| `Mapping.unshared(fn)` | Never modified. | `UNSHARED`: a new object. |
 
 A `WITH_SOURCE` result may be modified exactly when the argument could be, so a chain of
 rules and `derived` steps copies once. A `SHARED` result may be a constant or a cache entry,
-so it is always copied before an in-place step. Declare `derived` or `fresh` only when it is
+so it is always copied before an in-place step. Declare `withSource` or `unshared` only when it is
 true: if the function returns an object that something else references, that object will be
 modified later.
 
-A transformer may return a new root. Any nodes it adds must be safe for later transformers
-to mutate. Transformers never see approved snapshots. To control copying yourself, as JSON
+A transformation may return a new root. Any nodes it adds must be safe for later
+transformations to mutate. Transformations never see approved snapshots. To control copying yourself, as JSON
 rules do, implement `apply(document, canModifySource)`: copy first when it is `false`, and
 override `resultSharing()` truthfully (`SHARED` by default). The verifier tells each step
 whether it may modify its argument, based on the previous step's sharing.

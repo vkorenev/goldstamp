@@ -24,7 +24,7 @@ import tools.jackson.databind.node.NullNode;
  * var snapshots = json.verifier()
  *     .with(json.remove("$.generatedAt"), json.sort("$.items", "id"))
  *     .build();
- * snapshots.contramap(json.mapping()).assertMatches("orders", orderResponse);
+ * snapshots.prependTransformation(json.treeMapping()).assertMatches("orders", orderResponse);
  * }</pre>
  *
  * <p>Snapshots are pretty-printed with the mapper's default pretty printer and end with a newline.
