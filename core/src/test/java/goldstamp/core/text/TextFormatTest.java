@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.endsWith;
 import static org.junit.jupiter.api.Assertions.*;
 
 import goldstamp.core.VerificationResult;
+import goldstamp.core.spi.Mapping;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,7 +28,7 @@ class TextFormatTest {
         assertInstanceOf(
             VerificationResult.Missing.class,
             verifier
-                .<CharSequence>contramap(CharSequence::toString)
+                .contramap(Mapping.<CharSequence, String>pure(CharSequence::toString))
                 .verify("run", new StringBuilder("Hello\n  World")));
     assertThat(missing.receivedFile().getFileName().toString(), endsWith(".received.log"));
     assertEquals("Hello\n  World", Files.readString(missing.receivedFile()));

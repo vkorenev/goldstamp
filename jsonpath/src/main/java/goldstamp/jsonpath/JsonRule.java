@@ -21,8 +21,8 @@ import java.util.function.UnaryOperator;
  * one value unless the rule is {@link #optional()}; a rule that cannot apply throws {@link
  * SnapshotException} naming the rule.
  *
- * <p>{@link #apply} mutates the given tree. Outside a verifier, copy it first with {@link
- * JsonTreeFormat#toTree} if it must stay unchanged.
+ * <p>{@link #apply(Object, boolean) apply(tree, true)} mutates the given tree; with {@code false}
+ * it copies the tree first, so a verifier never modifies the caller's tree.
  *
  * @param <T> the tree-node type of the format
  */
@@ -53,10 +53,16 @@ public final class JsonRule<T> implements DocumentTransformer<T> {
   }
 
   @Override
-  public T apply(T document) {
+  public Sharing resultSharing() {
+    return Sharing.UNSHARED;
+  }
+
+  @Override
+  public T apply(T document, boolean canModifySource) {
     Objects.requireNonNull(document, "document");
+    T target = canModifySource ? document : format.toTree(document);
     try {
-      return applyAction(document);
+      return applyAction(target);
     } catch (InvalidModificationException failure) {
       // E.g. a filter or deep scan that also selects the root, which JsonPath cannot modify.
       throw new SnapshotException("Rule " + this + " cannot modify a matched value", failure);

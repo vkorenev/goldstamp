@@ -6,73 +6,89 @@ import java.util.function.UnaryOperator;
 /**
  * Transforms an incoming document. Never applied to approved snapshots.
  *
- * <p>In a verifier, transformers run in order, each receiving the preceding result. Before a
- * transformer whose {@link #effect()} is {@link Effect#IN_PLACE} receives a document that the
- * verifier does not own, the verifier replaces it with {@link SnapshotFormat#copy its own copy}, so
- * the caller's objects are never modified. A transformer may return a replacement root, and must
- * ensure any nodes it introduces are safe for subsequent transformers to mutate. Outside a
- * verifier, callers must copy first if their document needs to stay unchanged.
+ * <p>A transformer is a {@link Mapping} from a document to a document. Given {@code canModifySource
+ * == false} it must leave its argument unchanged, copying it first if it needs to modify it; given
+ * {@code true} it may modify the argument and return it or a replacement root. It must ensure any
+ * nodes it introduces are safe for subsequent transformers to mutate, and reports how its result is
+ * shared ({@link #resultSharing()}) truthfully: a result that may reference a constant or a cache
+ * is {@link Mapping.Sharing#SHARED}.
+ *
+ * <p>Create one from a function with {@link #inPlace}, {@link #pure}, {@link #derived} or {@link
+ * #fresh}; implement the interface directly to treat both cases yourself, as JSON rules do.
  *
  * @param <T> the document type
  */
 @FunctionalInterface
-public interface DocumentTransformer<T> {
-  /** What a transformer does to its argument, and what it promises about its result. */
-  enum Effect {
-    /**
-     * May mutate its argument. The result is the argument or a replacement built from private
-     * nodes.
-     */
-    IN_PLACE,
-    /** Never mutates its argument. The result may be the argument or share nodes with anything. */
-    PURE,
-    /**
-     * Never mutates its argument. The result is a new object: modifying it changes neither the
-     * argument nor anything else.
-     */
-    PURE_FRESH
-  }
-
-  /** Returns a non-null document, which may be a replacement root. */
-  T apply(T document);
-
+public interface DocumentTransformer<T> extends Mapping<T, T> {
   /**
-   * How {@link #apply} treats its argument and result. Returns {@link Effect#IN_PLACE} unless
-   * overridden, which is always safe; the other values let a verifier skip copies. See {@link
-   * #pure} and {@link #fresh}.
-   */
-  default Effect effect() {
-    return Effect.IN_PLACE;
-  }
-
-  /**
-   * A transformer that never mutates its argument, so the verifier need not copy the document for
-   * it. {@code function} must return a non-null document, which may share nodes with its argument
-   * or with other objects; the verifier copies it again before any in-place transformer.
+   * A transformer that never modifies its argument. {@code function} must return a non-null
+   * document, which may share nodes with its argument or other objects, so the result is treated as
+   * shared and copied before anything modifies it.
    */
   static <T> DocumentTransformer<T> pure(UnaryOperator<T> function) {
-    return of(function, Effect.PURE);
+    return of(function, Sharing.SHARED);
   }
 
   /**
-   * As {@link #pure}, but {@code function} must return a new object that shares no nodes with its
-   * argument or with anything else, so the verifier need not copy the result either.
+   * A transformer that never modifies its argument and returns it, or a document built from its
+   * nodes, such as a wrapper, referenced by nothing else. The result may then be modified exactly
+   * when the argument may. If {@code function} returns an object that something else references,
+   * that object will be modified later.
    */
-  static <T> DocumentTransformer<T> fresh(UnaryOperator<T> function) {
-    return of(function, Effect.PURE_FRESH);
+  static <T> DocumentTransformer<T> derived(UnaryOperator<T> function) {
+    return of(function, Sharing.WITH_SOURCE);
   }
 
-  private static <T> DocumentTransformer<T> of(UnaryOperator<T> function, Effect effect) {
+  /**
+   * A transformer that never modifies its argument and returns a new object that shares nothing
+   * with its argument or anything else, so that the result need not be copied. If {@code function}
+   * returns a shared or cached object, that object will be modified later.
+   */
+  static <T> DocumentTransformer<T> fresh(UnaryOperator<T> function) {
+    return of(function, Sharing.UNSHARED);
+  }
+
+  /**
+   * A transformer that may modify its argument: {@code function} receives the argument itself, or
+   * {@code copier}'s copy when the caller did not give the argument up. Both {@code function} and
+   * {@code copier} must return non-null documents, and {@code function}'s result must be safe to
+   * mutate: if it returns a shared object, that object will be modified later.
+   */
+  static <T> DocumentTransformer<T> inPlace(UnaryOperator<T> function, UnaryOperator<T> copier) {
+    Objects.requireNonNull(function, "function");
+    Objects.requireNonNull(copier, "copier");
+    return new DocumentTransformer<>() {
+      @Override
+      public T apply(T document, boolean canModifySource) {
+        return function.apply(
+            canModifySource
+                ? document
+                : Objects.requireNonNull(copier.apply(document), "Copier returned null"));
+      }
+
+      @Override
+      public Sharing resultSharing() {
+        return Sharing.UNSHARED;
+      }
+    };
+  }
+
+  private static <T> DocumentTransformer<T> of(UnaryOperator<T> function, Sharing sharing) {
     Objects.requireNonNull(function, "function");
     return new DocumentTransformer<>() {
       @Override
-      public T apply(T document) {
+      public T apply(T document, boolean canModifySource) {
         return function.apply(document);
       }
 
       @Override
-      public Effect effect() {
-        return effect;
+      public Sharing resultSharing() {
+        return sharing;
+      }
+
+      @Override
+      public String toString() {
+        return function.toString();
       }
     };
   }

@@ -19,7 +19,7 @@ var base = json.verifier()
     .receivedDirectory(Path.of("build/snapshots/received"))     // default
     .with(json.remove("$.generatedAt"))
     .build();
-var orders = base.with(json.sort("$.items", "id"));  // base is unchanged
+var orders = base.prependTransformations(json.sort("$.items", "id"));  // runs before base's rules
 ```
 
 - **Directories** are resolved against the working directory.
@@ -36,21 +36,25 @@ var orders = base.with(json.sort("$.items", "id"));  // base is unchanged
 
 ## Input
 
-A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with `contramap`:
+A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with `contramap`
+(`Mapping` is in `goldstamp.core.spi`):
 
 ```java
-Verifier<Order> orders = base.contramap(json::toTree);  // POJO, record, Map, collection
-Verifier<String> bodies = base.contramap(json::parse);  // JSON text
+Verifier<Order> orders = base.contramap(json.mapping());              // POJO, record, Map
+Verifier<String> bodies = base.contramap(Mapping.fresh(json::parse)); // JSON text
 ```
 
-- `toTree` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and other
-  Jackson annotations. A `JsonNode` is deep-copied.
-- The verifier copies the document before the first rule that changes it in place, so your
-  object is never modified. With no rules, or only
-  [`DocumentTransformer.pure`](extending.md#custom-transformers) ones, nothing is copied.
-- `copyInputs(false)` on the builder disables the copy. Rules then change the tree you pass
-  in, so use it only for trees built just for the verification.
-- `with(...)` exists only on `SnapshotVerifier`, so add rules before calling `contramap`.
+- `json.mapping()` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and
+  other Jackson annotations. A `JsonNode` is deep-copied.
+- `Mapping.fresh` says that the mapping returns a new tree, which the rules can modify
+  directly. `Mapping.pure` says it may return a shared one, which is copied first.
+  `Mapping.derived` says the result is built only from the source, so it is copied only if
+  you did not hand the source over.
+- `verify` never modifies what you pass in: a rule copies the tree before changing it, and a
+  later rule copies again only if the previous step may have shared its result. `verifyOwned`
+  hands the tree over, so rules change it without copying.
+- `prependTransformations` calls run in reverse order of the calls: `v.prependTransformations(a)
+  .prependTransformations(b)` applies b, then a, then `v`'s own rules.
 
 ## Configuring Jackson
 
@@ -101,10 +105,11 @@ previous rule's result.
 - Remaining ties are always broken by `JsonOrdering` on the whole element, so the result
   never depends on input order.
 
-Rules also work without a verifier, mutating the tree you pass in:
+Rules also work without a verifier. `apply(tree, true)` modifies the tree you pass in;
+`apply(tree, false)` leaves it unchanged and returns a copy:
 
 ```java
-JsonNode clean = json.remove("$.debug").optional().apply(json.parse(text));
+JsonNode clean = json.remove("$.debug").optional().apply(json.parse(text), true);
 ```
 
 ## JsonPath limitations

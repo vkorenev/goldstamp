@@ -2,7 +2,6 @@ package goldstamp.core;
 
 import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
-import goldstamp.core.spi.DocumentTransformer;
 import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.spi.TextComparator;
 import java.io.IOException;
@@ -11,35 +10,22 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * Verifies documents against approved snapshot files. Create one with {@link #builder}; {@link
- * #with} derives a new verifier with more transformers, and {@link #contramap} one for another
- * input type. Configuration is fixed after construction. Concurrent verifications require distinct
- * snapshot IDs and thread-safe formats, transformers, and comparators. Snapshot IDs are single file
- * names.
- *
- * <p>Each {@link #verify} call writes a {@code *.received.<ext>} file when the snapshot is missing
+ * Verifies documents against approved snapshot files; created by {@link Verifier.Builder#build()}.
+ * It compares documents and never modifies them, so {@link #verifyOwned} is the same as {@link
+ * #verify}. Each verification writes a {@code *.received.<ext>} file when the snapshot is missing
  * or different, and deletes a stale one when it matches. Approved files are never written.
- *
- * <pre>{@code
- * var snapshots = SnapshotVerifier.builder(format).with(transformer).build();
- * snapshots.assertMatches("orders", document);
- * snapshots.contramap(Order::toDocument).assertMatches("order-1", order);
- * }</pre>
  *
  * @param <T> the document type
  */
-public final class SnapshotVerifier<T> implements Verifier<T> {
+final class SnapshotVerifier<T> implements Verifier<T> {
   /** Compares text or documents without round-tripping either operand through the format. */
   @FunctionalInterface
-  private interface Comparison<T> {
+  interface Comparison<T> {
     ComparisonResult compare(
         Path approved, String approvedText, T actual, Supplier<String> actualText);
   }
@@ -56,144 +42,32 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
   private final Path approvedDirectory;
   private final Path receivedDirectory;
   private final SnapshotFormat<T> format;
-  private final List<DocumentTransformer<T>> transformers;
   private final Comparison<T> comparison;
   private final String extension;
-  private final boolean copyInputs;
 
-  private SnapshotVerifier(
+  SnapshotVerifier(
       Path approvedDirectory,
       Path receivedDirectory,
       SnapshotFormat<T> format,
-      List<DocumentTransformer<T>> transformers,
-      Comparison<T> comparison,
-      boolean copyInputs) {
-    this.copyInputs = copyInputs;
+      Comparison<T> comparison) {
     this.approvedDirectory = approvedDirectory;
     this.receivedDirectory = receivedDirectory;
     this.format = format;
-    this.transformers = transformers;
     this.comparison = comparison;
     this.extension = requireValidExtension(format.extension());
   }
 
-  /**
-   * Starts a verifier for documents of {@code format}. Defaults: approved files in {@code
-   * src/test/snapshots/approved}, received files in {@code build/snapshots/received} (both relative
-   * to the working directory), no transformers, and {@link LineComparator} text comparison.
-   */
-  public static <T> Builder<T> builder(SnapshotFormat<T> format) {
-    return new Builder<>(format);
-  }
-
-  /**
-   * Returns a new verifier that applies {@code more} after this verifier's transformers, so a
-   * shared base verifier can be extended per test. This verifier is unchanged.
-   */
-  @SafeVarargs
-  public final SnapshotVerifier<T> with(DocumentTransformer<T>... more) {
-    return new SnapshotVerifier<>(
-        approvedDirectory,
-        receivedDirectory,
-        format,
-        append(transformers, more),
-        comparison,
-        copyInputs);
-  }
-
-  /**
-   * Configures a {@link SnapshotVerifier}. Not thread-safe; {@link #build()} snapshots it.
-   *
-   * @param <T> the document type
-   */
-  public static final class Builder<T> {
-    private final SnapshotFormat<T> format;
-    private Path approvedDirectory = Path.of("src/test/snapshots/approved");
-    private Path receivedDirectory = Path.of("build/snapshots/received");
-    private List<DocumentTransformer<T>> transformers = List.of();
-    private Comparison<T> comparison = textComparison(new LineComparator());
-    private boolean copyInputs = true;
-
-    private Builder(SnapshotFormat<T> format) {
-      this.format = Objects.requireNonNull(format, "format");
-    }
-
-    /** Where manually approved snapshots live. GoldStamp never writes here. */
-    public Builder<T> approvedDirectory(Path directory) {
-      this.approvedDirectory = Objects.requireNonNull(directory, "directory");
-      return this;
-    }
-
-    /** Where {@code *.received.<ext>} files are written on a missing or different snapshot. */
-    public Builder<T> receivedDirectory(Path directory) {
-      this.receivedDirectory = Objects.requireNonNull(directory, "directory");
-      return this;
-    }
-
-    /**
-     * Appends transformers, applied in order to each incoming document, after {@link
-     * SnapshotFormat#copy copying} the document if any of them works {@linkplain
-     * DocumentTransformer#effect() in place}; never to approved snapshots.
-     */
-    @SafeVarargs
-    public final Builder<T> with(DocumentTransformer<T>... more) {
-      this.transformers = append(transformers, more);
-      return this;
-    }
-
-    /**
-     * Compares the parsed approval with the transformed actual document directly. The comparator
-     * must account for any representation changes caused by serialization. Replaces any earlier
-     * comparator. If the format cannot read an approved file, {@link #verify} throws {@link
-     * SnapshotException} naming that file.
-     */
-    public Builder<T> documentComparator(DocumentComparator<? super T> comparator) {
-      this.comparison =
-          documentComparison(format, Objects.requireNonNull(comparator, "comparator"));
-      return this;
-    }
-
-    /**
-     * Compares approved file text with serialized actual text (the default strategy). Replaces any
-     * earlier comparator.
-     */
-    public Builder<T> textComparator(TextComparator comparator) {
-      this.comparison = textComparison(Objects.requireNonNull(comparator, "comparator"));
-      return this;
-    }
-
-    /**
-     * Whether to copy a document before the first in-place transformer modifies it (default {@code
-     * true}). Pass {@code false} only when every input may be modified, e.g. because it was just
-     * built for the verification; the caller's object then changes.
-     */
-    public Builder<T> copyInputs(boolean copy) {
-      this.copyInputs = copy;
-      return this;
-    }
-
-    /** Creates the verifier. */
-    public SnapshotVerifier<T> build() {
-      return new SnapshotVerifier<>(
-          approvedDirectory.toAbsolutePath().normalize(),
-          receivedDirectory.toAbsolutePath().normalize(),
-          format,
-          transformers,
-          comparison,
-          copyInputs);
-    }
-  }
-
-  /**
-   * Verifies a document. The transformers run in order; before an in-place one receives a document
-   * that is not yet private, the format copies it, so {@code actual} and approved files are never
-   * modified unless {@link Builder#copyInputs} is {@code false}. With no such transformer, nothing
-   * is copied.
-   *
-   * @see Verifier#verify for the parameters and exceptions
-   */
   @Override
   public VerificationResult verify(String snapshotId, T actual) {
+    return verifyDocument(snapshotId, actual);
+  }
+
+  @Override
+  public VerificationResult verifyOwned(String snapshotId, T actual) {
+    return verifyDocument(snapshotId, actual);
+  }
+
+  private VerificationResult verifyDocument(String snapshotId, T actual) {
     Objects.requireNonNull(actual, "actual");
     if (snapshotId == null || !SNAPSHOT_ID.matcher(snapshotId).matches()) {
       throw new IllegalArgumentException(
@@ -203,32 +77,7 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
     }
     Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
     Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
-    T current = actual;
-    // Whether current is private to this verification, so in-place transformers may mutate it.
-    boolean owned = !copyInputs;
-    for (DocumentTransformer<T> transformer : transformers) {
-      DocumentTransformer.Effect effect = transformer.effect();
-      if (!owned && effect == DocumentTransformer.Effect.IN_PLACE) {
-        current = Objects.requireNonNull(format.copy(current), "Copied document");
-        owned = true;
-      }
-      current =
-          Objects.requireNonNull(
-              transformer.apply(current),
-              () ->
-                  "Transformer "
-                      + transformer
-                      + " returned null for snapshot '"
-                      + snapshotId
-                      + "'");
-      if (effect == DocumentTransformer.Effect.PURE) {
-        owned = !copyInputs; // The result may be shared.
-      } else if (effect == DocumentTransformer.Effect.PURE_FRESH) {
-        owned = true;
-      }
-    }
-    T transformedDocument = current;
-    Supplier<String> actualText = memoize(() -> serialize(transformedDocument));
+    Supplier<String> actualText = memoize(() -> serialize(actual));
     String approvedText;
     try {
       approvedText = Files.readString(approved);
@@ -240,8 +89,7 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
     }
     ComparisonResult result =
         Objects.requireNonNull(
-            comparison.compare(approved, approvedText, transformedDocument, actualText),
-            "Comparison result");
+            comparison.compare(approved, approvedText, actual, actualText), "Comparison result");
     if (result instanceof ComparisonResult.Different different) {
       writeReceived(received, actualText.get());
       return new VerificationResult.Different(
@@ -253,13 +101,6 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
       throw new SnapshotException("Cannot delete stale received snapshot " + received, failure);
     }
     return new VerificationResult.Matching(snapshotId, approved);
-  }
-
-  private static <T> List<DocumentTransformer<T>> append(
-      List<DocumentTransformer<T>> transformers, DocumentTransformer<T>[] more) {
-    var chain = new ArrayList<>(transformers);
-    chain.addAll(Arrays.asList(more));
-    return List.copyOf(chain); // Rejects null elements.
   }
 
   private static String requireValidExtension(String extension) {
@@ -274,12 +115,12 @@ public final class SnapshotVerifier<T> implements Verifier<T> {
     return extension;
   }
 
-  private static <T> Comparison<T> textComparison(TextComparator comparator) {
+  static <T> Comparison<T> textComparison(TextComparator comparator) {
     return (approved, approvedText, actual, actualText) ->
         comparator.compare(approvedText, actualText.get());
   }
 
-  private static <T> Comparison<T> documentComparison(
+  static <T> Comparison<T> documentComparison(
       SnapshotFormat<T> format, DocumentComparator<? super T> comparator) {
     return (approved, approvedText, actual, actualText) ->
         comparator.compare(parseApproved(format, approved, approvedText), actual);

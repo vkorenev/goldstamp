@@ -1,29 +1,38 @@
 # Extending GoldStamp
 
 The extension points live in `goldstamp.core.spi`. Their Javadoc is the full contract.
-There is no registry: pass your implementations to `SnapshotVerifier.builder(format)` and
+There is no registry: pass your implementations to `Verifier.builder(format)` and
 the builder methods. Input types are adapted with `Verifier.contramap`, not by formats.
 
 ## Custom transformers
 
-`DocumentTransformer<T>` is a single method, `T apply(T)`, so a lambda works:
+A `DocumentTransformer<T>` is a `Mapping<T, T>`: `apply(document, canModifySource)` plus
+`resultSharing()`. To run a function on a whole JSON document, use `json.transform("$", fn)`:
 
 ```java
 var snapshots = json.verifier()
-    .with(doc -> ((ObjectNode) doc).put("version", "<version>"))
+    .with(json.transform("$", doc -> ((ObjectNode) doc).put("version", "<version>")))
     .build();
 ```
 
-A transformer may mutate its input or return a new root. Any nodes it adds must be safe for
-later transformers to mutate. Transformers never see approved snapshots.
-
-The verifier copies the document before an in-place transformer receives one that is not yet
-private. Lambdas and rules are in place. To let the verifier skip copies, declare the effect:
-
-| Create with | Promise | Result |
+| Create with | Argument | Result |
 | --- | --- | --- |
-| `DocumentTransformer.pure(fn)` | Never mutates its argument. | May be shared; copied before the next in-place transformer. |
-| `DocumentTransformer.fresh(fn)` | Never mutates its argument. | A new object, safe to mutate; not copied. |
+| `DocumentTransformer.inPlace(fn, copier)` | May be modified; `copier` copies it first unless the caller handed it over. | `UNSHARED`. |
+| `DocumentTransformer.pure(fn)` | Never modified. | `SHARED`: anything may reference it, so it is copied before an in-place step. |
+| `DocumentTransformer.derived(fn)` | Never modified. | `WITH_SOURCE`: the argument or a wrapper built from it, referenced by nothing else. |
+| `DocumentTransformer.fresh(fn)` | Never modified. | `UNSHARED`: a new object. |
+
+A `WITH_SOURCE` result may be modified exactly when the argument could be, so a chain of
+rules and `derived` steps copies once. A `SHARED` result may be a constant or a cache entry,
+so it is always copied before an in-place step. Declare `derived` or `fresh` only when it is
+true: if the function returns an object that something else references, that object will be
+modified later.
+
+A transformer may return a new root. Any nodes it adds must be safe for later transformers
+to mutate. Transformers never see approved snapshots. To control copying yourself, as JSON
+rules do, implement `apply(document, canModifySource)`: copy first when it is `false`, and
+override `resultSharing()` truthfully (`SHARED` by default). The verifier tells each step
+whether it may modify its argument, based on the previous step's sharing.
 
 ## Custom comparators
 
@@ -44,7 +53,7 @@ Extend `goldstamp.jsonpath.JsonTreeFormat<T>`. Your subclass inherits the rules,
    them for Jackson 2, Gson, json-smart and Jakarta JSON.
 2. `toTree(Object)`, which deep-copies a tree node, converts any other value, and maps
    `null` to JSON null.
-3. `extension()`, `copy`, `serialize` and `deserialize`.
+3. `extension()`, `serialize` and `deserialize`.
 
 [`JacksonJson`](../jackson3-json/src/main/java/goldstamp/jackson3/json/JacksonJson.java) is
 the reference implementation. Only the Jackson 3 provider is tested.
@@ -56,7 +65,6 @@ Implement `SnapshotFormat<T>` directly:
 | Method | Contract |
 | --- | --- |
 | `extension()` | A file suffix such as `yaml` or `tar.gz`, with no leading dot. It is validated when the verifier is built. |
-| `copy(T)` | Returns a copy that transformers may mutate; an immutable document may be returned as is. |
 | `serialize(T)` | Returns the snapshot text. |
 | `deserialize(String)` | Reads your own output and equivalent hand-edited text. |
 

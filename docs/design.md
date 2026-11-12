@@ -22,8 +22,9 @@ input ──contramap──▶ document ──rules──▶ document ──comp
 
 1. Your input, such as a POJO, is mapped to a document with `contramap`. A verifier of
    documents, such as `JsonNode`, takes them directly.
-2. **Transformers** (rules or lambdas) clean up that document in order. The format copies it
-   before the first transformer that changes it in place, so your object is never touched.
+2. **Transformers** (rules or functions) clean up that document in order. A transformer
+   copies the document before changing it unless the caller handed it over, and says whether its
+   result may be shared, so a copy is made only when needed and your object is never touched.
 3. A **comparator** checks the result against the approved file. By default it compares
    text.
 4. If the snapshot is missing or different, GoldStamp writes a `*.received.*` file for you
@@ -40,7 +41,6 @@ input ──contramap──▶ document ──rules──▶ document ──comp
 A *format* (`SnapshotFormat<T>`) is the central idea. It owns everything specific to one
 document model:
 - the file extension;
-- copying a document;
 - reading and writing snapshot text.
 
 Each module's format class is also its entry point, so you rarely need anything else.
