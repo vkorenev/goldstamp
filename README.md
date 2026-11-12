@@ -18,10 +18,10 @@ var snapshots = json.verifier()
         json.sort("$.items", "id"))
     .build();
 
-snapshots.assertMatches("raw", json.parse(responseBody));  // a JsonNode
-
 var orders = snapshots.prependTransformation(json.treeMapping());  // Verifier<Object>
-orders.assertMatches("orders", order);                               // a POJO, record or Map
+orders.assertMatches("orders", order);  // a POJO, record or Map
+
+snapshots.assertMatches("raw", json.parse(responseBody));  // a JsonNode
 ```
 
 1. **First run.** The test fails and writes `build/snapshots/received/orders.received.json`.

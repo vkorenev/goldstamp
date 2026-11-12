@@ -11,32 +11,34 @@ import java.util.function.UnaryOperator;
  *
  * <p>The caller says whether it hands over the source ({@code canModifySource}); the mapping says
  * how its result is {@linkplain Sharing shared} ({@link #resultSharing()}). A mapping that would
- * modify the source must copy it first unless it may. The verifier copies a result before anything
- * modifies it unless the result is unshared, or shared only with a source that was handed over, so
- * a chain of mappings copies only when something might be referenced elsewhere. Neither claim is
- * checked: a false one lets a shared object or the caller's own object be modified without any
- * error.
+ * modify the source must copy it first unless it may. Subsequent mappings copy a result before
+ * modifying it unless it is unshared, or shared only with a source that was handed over, so a chain
+ * of mappings copies only when something might be referenced elsewhere. Neither claim is checked: a
+ * false one lets a shared object or the caller's own object be modified without any error.
  *
  * @param <S> the source type
  * @param <T> the result type
  */
 @FunctionalInterface
 public interface Mapping<S, T> {
-  /** Who else may reference a mapping's result. */
+  /**
+   * Who else may reference mutable state in a result or its descendants. Immutable values may be
+   * shared.
+   */
   enum Sharing {
     /**
-     * Anything may reference the result: a constant, a cache entry, another object. It must be
-     * copied before it is modified.
+     * Mutable state in the result or its descendants may be referenced elsewhere, such as by a
+     * cache or another object. It must be copied before it is modified.
      */
     SHARED,
     /**
-     * The result is the source, or is built from parts of it, and nothing else references it. It
-     * may be modified exactly when the source was handed over.
+     * The result shares mutable state only with the source. It may be modified exactly when the
+     * source was handed over.
      */
     WITH_SOURCE,
     /**
-     * Nothing else references the result, whatever {@code canModifySource} was: it is new, or a
-     * copy. It may be modified.
+     * No mutable state in the result or its descendants is referenced outside this verification,
+     * whatever {@code canModifySource} was. They may be modified.
      */
     UNSHARED
   }
@@ -68,18 +70,18 @@ public interface Mapping<S, T> {
 
   /**
    * A mapping that never modifies its source and returns the source or a value built from parts of
-   * it, such as a wrapper, referenced by nothing else. {@code function} must return a non-null
-   * value. If it returns an object that something else references, that object will be modified
-   * later.
+   * it, such as a wrapper. The result and its descendants must share mutable state only with the
+   * source; immutable values may be shared freely. {@code function} must return a non-null value.
    */
   static <S, T> Mapping<S, T> withSource(Function<? super S, ? extends T> function) {
     return of(function, Sharing.WITH_SOURCE);
   }
 
   /**
-   * A mapping that never modifies its source and returns a new object, such as a converted tree,
-   * that shares nothing with the source or anything else. {@code function} must return a non-null
-   * value. If it returns a shared or cached object, that object will be modified later.
+   * A mapping that never modifies its source and returns a non-null value whose mutable state,
+   * including that of its descendants, is shared with neither the source nor anything else.
+   * Immutable values may be shared. The function must not retain mutable parts of the result for
+   * use outside the verification.
    */
   static <S, T> Mapping<S, T> unshared(Function<? super S, ? extends T> function) {
     return of(function, Sharing.UNSHARED);
@@ -88,9 +90,10 @@ public interface Mapping<S, T> {
   /**
    * A transformation that may modify its argument: {@code function} receives the argument itself,
    * or {@code copier}'s copy when the caller did not hand the argument over. Both {@code function}
-   * and {@code copier} must return non-null values, and {@code function}'s result must be safe to
-   * mutate: if it returns a shared object, that object will be modified later. Its result is {@link
-   * Sharing#UNSHARED}.
+   * and {@code copier} must return non-null values. The copier must isolate mutable state from the
+   * source. The function must not introduce externally shared mutable state or retain mutable parts
+   * of its argument or result for use outside the verification. Immutable values may be shared. Its
+   * result is {@link Sharing#UNSHARED}.
    */
   static <T> Mapping<T, T> inPlace(UnaryOperator<T> function, UnaryOperator<T> copier) {
     Objects.requireNonNull(function, "function");

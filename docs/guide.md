@@ -31,7 +31,7 @@ var orders = base.prependTransformation(json.sort("$.items", "id"));  // runs be
 - **`assertMatches`** throws `AssertionError` on a missing or different snapshot.
 - **`verify`** returns a `VerificationResult`, which is one of `Matching`, `Missing` or
   `Different`:
-  - Every result has `matches()` and `diagnostic()`.
+  - Every result has `matches()`, `diagnostic()` and `assertMatches()`.
   - `Missing` and `Different` also have `receivedFile()`.
 - **On a match**, any stale received file is deleted.
 
@@ -56,6 +56,12 @@ Verifier<String> bodies = base.prependTransformation(Mapping.unshared(json::pars
   hands the tree over, so rules change it without copying.
 - `prependTransformation` calls run in reverse order of the calls: `v.prependTransformation(a)
   .prependTransformation(b)` applies b, then a, then `v`'s own rules.
+
+Assert an owned verification through its result:
+
+```java
+base.verifyOwned("response", json.parse(responseBody)).assertMatches();
+```
 
 ## Configuring Jackson
 

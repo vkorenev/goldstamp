@@ -78,10 +78,9 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
    * Replaces each selected value with the function's non-null result. The function receives the
    * live node and may mutate and return it, or return a new node, e.g. from {@link #toTree}.
    *
-   * <p>Later rules and the verifier modify the result, so the function must not return an object
-   * that anything else references, such as a constant, a cached node or a node of another tree, and
-   * must not keep a reference to the node it receives or returns. Break either rule and unrelated
-   * tests can see modified data.
+   * <p>Subsequent transformations may mutate the result or its descendants. The function must not
+   * introduce externally shared mutable state or retain mutable nodes for use outside this
+   * verification. Immutable values may be shared.
    */
   public final JsonRule<T> transform(String selector, UnaryOperator<T> function) {
     return new JsonRule<>(

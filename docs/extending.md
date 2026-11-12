@@ -19,14 +19,14 @@ var snapshots = json.verifier()
 | --- | --- | --- |
 | `Mapping.inPlace(fn, copier)` | May be modified; `copier` copies it first unless the caller handed it over. | `UNSHARED`. |
 | `Mapping.shared(fn)` | Never modified. | `SHARED`: anything may reference it, so it is copied before an in-place step. |
-| `Mapping.withSource(fn)` | Never modified. | `WITH_SOURCE`: the argument or a wrapper built from it, referenced by nothing else. |
-| `Mapping.unshared(fn)` | Never modified. | `UNSHARED`: a new object. |
+| `Mapping.withSource(fn)` | Never modified. | `WITH_SOURCE`: mutable state is shared only with the argument. |
+| `Mapping.unshared(fn)` | Never modified. | `UNSHARED`: no externally shared mutable state. |
 
 A `WITH_SOURCE` result may be modified exactly when the argument could be, so a chain of
-rules and `derived` steps copies once. A `SHARED` result may be a constant or a cache entry,
+rules and `withSource` steps copies once. A `SHARED` result may be a constant or a cache entry,
 so it is always copied before an in-place step. Declare `withSource` or `unshared` only when it is
-true: if the function returns an object that something else references, that object will be
-modified later.
+true: externally shared mutable state in the result or its descendants may be modified later.
+Immutable values may be shared.
 
 A transformation may return a new root. Any nodes it adds must be safe for later
 transformations to mutate. Transformations never see approved snapshots. To control copying yourself, as JSON

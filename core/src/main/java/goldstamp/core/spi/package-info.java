@@ -1,6 +1,6 @@
 /**
- * Extension points: the format that converts input into documents and documents to and from
- * snapshot text, the transformations applied to incoming documents, and the comparators that decide
- * whether a document matches its approved snapshot.
+ * Extension points: mappings that convert inputs and transform documents, formats that convert
+ * documents to and from snapshot text, and comparators that decide whether a document matches its
+ * approved snapshot.
  */
 package goldstamp.core.spi;
