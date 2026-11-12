@@ -43,8 +43,9 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
   public abstract T toTree(Object value);
 
   /**
-   * A mapping from any Java value to a tree, as {@link #toTree}. Its result is fresh, so a verifier
-   * can modify it without copying: {@code snapshots.prependTransformation(json.treeMapping())}.
+   * A mapping from any Java value to a tree, as {@link #toTree}. Its result is unshared, so a
+   * verifier can modify it without copying: {@code
+   * snapshots.prependTransformation(json.treeMapping())}.
    */
   public final Mapping<Object, T> treeMapping() {
     return Mapping.unshared(this::toTree);

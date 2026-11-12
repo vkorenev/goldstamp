@@ -41,16 +41,16 @@ A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with
 `prependTransformation` (`Mapping` is in `goldstamp.core.spi`):
 
 ```java
-Verifier<Order> orders = base.prependTransformation(json.treeMapping());        // POJO, Map
+Verifier<Order> orders = base.prependTransformation(json.treeMapping());           // POJO, Map
 Verifier<String> bodies = base.prependTransformation(Mapping.unshared(json::parse)); // text
 ```
 
 - `json.treeMapping()` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and
   other Jackson annotations. A `JsonNode` is deep-copied.
-- `Mapping.unshared` says that the mapping returns a new tree, which the rules can modify
-  directly. `Mapping.shared` says it may return a shared one, which is copied first.
-  `Mapping.withSource` says the result is built only from the source, so it is copied only if
-  you did not hand the source over.
+- `Mapping.unshared` says that no mutable state in the result is shared with anything else,
+  so the rules can modify it directly. `Mapping.shared` says it may be, so the result is
+  copied first. `Mapping.withSource` says it is shared only with the source, so the result
+  is copied only if you did not hand the source over.
 - `verify` never modifies what you pass in: a rule copies the tree before changing it, and a
   later rule copies again only if the previous step may have shared its result. `verifyOwned`
   hands the tree over, so rules change it without copying.

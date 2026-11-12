@@ -38,7 +38,7 @@ public interface Mapping<S, T> {
     WITH_SOURCE,
     /**
      * No mutable state in the result or its descendants is referenced outside this verification,
-     * whatever {@code canModifySource} was. They may be modified.
+     * whatever {@code canModifySource} was. That state may be modified.
      */
     UNSHARED
   }
