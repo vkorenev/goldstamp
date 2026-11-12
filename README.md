@@ -18,8 +18,10 @@ var snapshots = json.verifier()
         json.sort("$.items", "id"))
     .build();
 
-snapshots.contramap(json::toTree).assertMatches("orders", order);  // a POJO, record or Map
-snapshots.assertMatches("raw", json.parse(responseBody));          // or a JsonNode
+var orders = snapshots.prependTransformation(json.treeMapping());  // Verifier<Object>
+orders.assertMatches("orders", order);  // a POJO, record or Map
+
+snapshots.assertMatches("raw", json.parse(responseBody));  // a JsonNode
 ```
 
 1. **First run.** The test fails and writes `build/snapshots/received/orders.received.json`.
@@ -45,8 +47,10 @@ Rules run in order. A rule that matches nothing fails the test unless it is `.op
 
 ## More
 
-- `verifier.with(rules...)` returns an extended copy of a shared verifier.
-- `verifier.contramap(fn)` returns a verifier for another input type, e.g. `Verifier<Order>`.
+- `verifier.prependTransformation(rule)` returns a copy that runs the rule first, so a shared
+  verifier can be extended per test. Pass a `List` to `prependTransformations` for several.
+- `verifier.prependTransformation(mapping)` also adapts the input type, e.g. to
+  `Verifier<Order>`.
 - `verify(id, input)` returns a `VerificationResult` instead of throwing.
 - To change the JSON layout or naming, use
   `JacksonJson.of(JacksonJson.defaultMapper().rebuild()...build())`.
@@ -57,7 +61,7 @@ The guides cover the rest:
 - [User guide](docs/guide.md) covers configuration, rule details, JsonPath limitations,
   comparison and errors.
 - [Extending GoldStamp](docs/extending.md) covers custom formats, other JSON libraries,
-  transformers and comparators.
+  transformations and comparators.
 - [Design](docs/design.md) explains how GoldStamp works and why.
 - [Contributing](CONTRIBUTING.md) covers building and submitting changes.
 

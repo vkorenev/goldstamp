@@ -24,7 +24,7 @@ import tools.jackson.databind.node.NullNode;
  * var snapshots = json.verifier()
  *     .with(json.remove("$.generatedAt"), json.sort("$.items", "id"))
  *     .build();
- * snapshots.contramap(json::toTree).assertMatches("orders", orderResponse);
+ * snapshots.prependTransformation(json.treeMapping()).assertMatches("orders", orderResponse);
  * }</pre>
  *
  * <p>Snapshots are pretty-printed with the mapper's default pretty printer and end with a newline.
@@ -73,11 +73,6 @@ public final class JacksonJson extends JsonTreeFormat<JsonNode> {
       return node.deepCopy();
     }
     return mapper.valueToTree(value);
-  }
-
-  @Override
-  public JsonNode copy(JsonNode document) {
-    return document.deepCopy();
   }
 
   @Override

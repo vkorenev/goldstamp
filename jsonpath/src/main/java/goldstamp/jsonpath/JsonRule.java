@@ -5,7 +5,7 @@ import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.PathNotFoundException;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import goldstamp.core.SnapshotException;
-import goldstamp.core.spi.DocumentTransformer;
+import goldstamp.core.spi.Mapping;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -15,18 +15,18 @@ import java.util.function.Function;
 import java.util.function.UnaryOperator;
 
 /**
- * An immutable transformer applying one action to every value a JsonPath selector matches. Create
- * rules with a {@link JsonTreeFormat}; an invalid selector or sort key, a function path or removing
- * the root throws {@link IllegalArgumentException} at creation. The selector must match at least
- * one value unless the rule is {@link #optional()}; a rule that cannot apply throws {@link
+ * An immutable transformation applying one action to every value a JsonPath selector matches.
+ * Create rules with a {@link JsonTreeFormat}; an invalid selector or sort key, a function path or
+ * removing the root throws {@link IllegalArgumentException} at creation. The selector must match at
+ * least one value unless the rule is {@link #optional()}; a rule that cannot apply throws {@link
  * SnapshotException} naming the rule.
  *
- * <p>{@link #apply} mutates the given tree. Outside a verifier, copy it first with {@link
- * JsonTreeFormat#toTree} if it must stay unchanged.
+ * <p>{@link #apply(Object, boolean) apply(tree, true)} mutates the given tree; with {@code false}
+ * it copies the tree first, so a verifier never modifies the caller's tree.
  *
  * @param <T> the tree-node type of the format
  */
-public final class JsonRule<T> implements DocumentTransformer<T> {
+public final class JsonRule<T> implements Mapping<T, T> {
   private final JsonTreeFormat<T> format;
   private final JsonPath selector;
   private final Action<T> action;
@@ -53,10 +53,16 @@ public final class JsonRule<T> implements DocumentTransformer<T> {
   }
 
   @Override
-  public T apply(T document) {
+  public Mapping.Sharing resultSharing() {
+    return Mapping.Sharing.UNSHARED;
+  }
+
+  @Override
+  public T apply(T document, boolean canModifySource) {
     Objects.requireNonNull(document, "document");
+    T target = canModifySource ? document : format.toTree(document);
     try {
-      return applyAction(document);
+      return applyAction(target);
     } catch (InvalidModificationException failure) {
       // E.g. a filter or deep scan that also selects the root, which JsonPath cannot modify.
       throw new SnapshotException("Rule " + this + " cannot modify a matched value", failure);

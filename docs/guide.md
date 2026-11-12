@@ -19,38 +19,49 @@ var base = json.verifier()
     .receivedDirectory(Path.of("build/snapshots/received"))     // default
     .with(json.remove("$.generatedAt"))
     .build();
-var orders = base.with(json.sort("$.items", "id"));  // base is unchanged
+var orders = base.prependTransformation(json.sort("$.items", "id"));  // runs before base's rules
 ```
 
 - **Directories** are resolved against the working directory.
 - **Snapshot IDs** become file names: `<id>.approved.json` and `<id>.received.json`. An ID
   is letters, digits, `.`, `_` and `-`, and must start with a letter or digit.
 - **Concurrent tests** must use distinct IDs.
-- **`contramap`** gives a verifier for another input type; see [Input](#input).
+- **`prependTransformation`** also gives a verifier for another input type; see
+  [Input](#input).
 - **`assertMatches`** throws `AssertionError` on a missing or different snapshot.
 - **`verify`** returns a `VerificationResult`, which is one of `Matching`, `Missing` or
   `Different`:
-  - Every result has `matches()` and `diagnostic()`.
+  - Every result has `matches()`, `diagnostic()` and `assertMatches()`.
   - `Missing` and `Different` also have `receivedFile()`.
 - **On a match**, any stale received file is deleted.
 
 ## Input
 
-A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with `contramap`:
+A verifier built from `json.verifier()` takes `JsonNode`s. Map other inputs with
+`prependTransformation` (`Mapping` is in `goldstamp.core.spi`):
 
 ```java
-Verifier<Order> orders = base.contramap(json::toTree);  // POJO, record, Map, collection
-Verifier<String> bodies = base.contramap(json::parse);  // JSON text
+Verifier<Order> orders = base.prependTransformation(json.treeMapping());           // POJO, Map
+Verifier<String> bodies = base.prependTransformation(Mapping.unshared(json::parse)); // text
 ```
 
-- `toTree` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and other
-  Jackson annotations. A `JsonNode` is deep-copied.
-- The verifier copies the document before the first rule that changes it in place, so your
-  object is never modified. With no rules, or only
-  [`DocumentTransformer.pure`](extending.md#custom-transformers) ones, nothing is copied.
-- `copyInputs(false)` on the builder disables the copy. Rules then change the tree you pass
-  in, so use it only for trees built just for the verification.
-- `with(...)` exists only on `SnapshotVerifier`, so add rules before calling `contramap`.
+- `json.treeMapping()` uses `mapper.valueToTree`, which honors `@JsonProperty`, `@JsonIgnore` and
+  other Jackson annotations. A `JsonNode` is deep-copied.
+- `Mapping.unshared` says that no mutable state in the result is shared with anything else,
+  so the rules can modify it directly. `Mapping.shared` says it may be, so the result is
+  copied first. `Mapping.withSource` says it is shared only with the source, so the result
+  is copied only if you did not hand the source over.
+- `verify` never modifies what you pass in: a rule copies the tree before changing it, and a
+  later rule copies again only if the previous step may have shared its result. `verifyOwned`
+  hands the tree over, so rules change it without copying.
+- `prependTransformation` calls run in reverse order of the calls: `v.prependTransformation(a)
+  .prependTransformation(b)` applies b, then a, then `v`'s own rules.
+
+Assert an owned verification through its result:
+
+```java
+base.verifyOwned("response", json.parse(responseBody)).assertMatches();
+```
 
 ## Configuring Jackson
 
@@ -72,7 +83,7 @@ the format that created them, because a rule converts values with its own format
 
 ## Rules
 
-Rules are immutable `DocumentTransformer`s. They run in order, and each one sees the
+Rules are immutable `Mapping<T, T>`s. They run in order, and each one sees the
 previous rule's result.
 
 **Matching**
@@ -101,10 +112,11 @@ previous rule's result.
 - Remaining ties are always broken by `JsonOrdering` on the whole element, so the result
   never depends on input order.
 
-Rules also work without a verifier, mutating the tree you pass in:
+Rules also work without a verifier. `apply(tree, true)` modifies the tree you pass in;
+`apply(tree, false)` leaves it unchanged and returns a copy:
 
 ```java
-JsonNode clean = json.remove("$.debug").optional().apply(json.parse(text));
+JsonNode clean = json.remove("$.debug").optional().apply(json.parse(text), true);
 ```
 
 ## JsonPath limitations
@@ -155,5 +167,5 @@ structural diffs, a JSON diff library can do the comparison; check its Jackson 3
 | Invalid snapshot ID | `IllegalArgumentException` | When `verify` runs |
 | A rule cannot apply, e.g. `Rule remove($['debug']) matched no values` | `SnapshotException` naming the rule | When `verify` runs; no received file is written |
 | A snapshot file cannot be read, written or deleted, or (with a document comparator) parsed | `SnapshotException` naming the file | When `verify` runs |
-| `null` input, or a mapper, transformer or transform function returns `null` | `NullPointerException` | When `verify` runs |
+| `null` input, or a transformation or transform function returns `null` | `NullPointerException` | When `verify` runs |
 | Your mapper or other code throws | Its exception, unchanged | When `verify` runs |

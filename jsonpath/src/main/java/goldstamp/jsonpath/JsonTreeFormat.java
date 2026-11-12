@@ -3,7 +3,8 @@ package goldstamp.jsonpath;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.MappingProvider;
-import goldstamp.core.SnapshotVerifier;
+import goldstamp.core.Verifier;
+import goldstamp.core.spi.Mapping;
 import goldstamp.core.spi.SnapshotFormat;
 import java.util.Comparator;
 import java.util.Objects;
@@ -14,9 +15,9 @@ import java.util.function.UnaryOperator;
  * rules only with the format that created them.
  *
  * <p>To support a JSON library, subclass it with the library's JsonPath {@link JsonProvider} and
- * {@link MappingProvider}, and implement {@link #toTree}, {@link #extension}, {@link #copy}, {@link
- * #serialize} and {@link #deserialize}. To verify POJOs or other values, map them with {@code
- * verifier.contramap(format::toTree)}.
+ * {@link MappingProvider}, and implement {@link #toTree}, {@link #extension}, {@link #serialize}
+ * and {@link #deserialize}. To verify POJOs or other values, map them with {@code
+ * verifier.prependTransformation(format.treeMapping())}.
  *
  * @param <T> the tree-node type of the provider
  */
@@ -41,14 +42,23 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
    */
   public abstract T toTree(Object value);
 
+  /**
+   * A mapping from any Java value to a tree, as {@link #toTree}. Its result is unshared, so a
+   * verifier can modify it without copying: {@code
+   * snapshots.prependTransformation(json.treeMapping())}.
+   */
+  public final Mapping<Object, T> treeMapping() {
+    return Mapping.unshared(this::toTree);
+  }
+
   /** Parses JSON text into a tree, as approved snapshots are read. */
   public final T parse(String json) {
     return deserialize(Objects.requireNonNull(json, "json"));
   }
 
   /** Starts a verifier for this format. */
-  public final SnapshotVerifier.Builder<T> verifier() {
-    return SnapshotVerifier.builder(this);
+  public final Verifier.Builder<T> verifier() {
+    return Verifier.builder(this);
   }
 
   /** Removes the selected values. The selector may not be the root ({@code $}). */
@@ -68,6 +78,10 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
   /**
    * Replaces each selected value with the function's non-null result. The function receives the
    * live node and may mutate and return it, or return a new node, e.g. from {@link #toTree}.
+   *
+   * <p>Subsequent transformations may mutate the result or its descendants. The function must not
+   * introduce externally shared mutable state or retain mutable nodes for use outside this
+   * verification. Immutable values may be shared.
    */
   public final JsonRule<T> transform(String selector, UnaryOperator<T> function) {
     return new JsonRule<>(
