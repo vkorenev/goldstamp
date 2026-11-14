@@ -25,8 +25,8 @@ input ──transform──▶ document ──rules──▶ document ──comp
 2. **Transformations** (rules or functions) clean up that document in order. Each one
    copies the document before changing it unless the caller handed it over, and says whether its
    result may be shared, so a copy is made only when needed and your object is never touched.
-3. A **comparator** checks the result against the approved file. By default it compares
-   text.
+3. A **comparator** checks the result against the approved file, read from a directory or
+   the classpath. By default it compares text.
 4. If the snapshot is missing or different, GoldStamp writes a `*.received.*` file for you
    to review. It never writes approved files.
 

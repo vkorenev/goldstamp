@@ -11,8 +11,8 @@ public sealed interface VerificationResult {
   /** The ID passed to {@code verify}. */
   String snapshotId();
 
-  /** The approved snapshot file; it may not exist (see {@link Missing}). */
-  Path approvedFile();
+  /** Where the approved snapshot is; it may not exist (see {@link Missing}). */
+  ApprovedLocation approvedLocation();
 
   /** A human-readable summary suitable for a test failure message. */
   String diagnostic();
@@ -34,22 +34,23 @@ public sealed interface VerificationResult {
   }
 
   /** The document matches the approved snapshot; any stale received file was deleted. */
-  record Matching(String snapshotId, Path approvedFile) implements VerificationResult {
+  record Matching(String snapshotId, ApprovedLocation approvedLocation)
+      implements VerificationResult {
     public Matching {
-      validate(snapshotId, approvedFile);
+      validate(snapshotId, approvedLocation);
     }
 
     @Override
     public String diagnostic() {
-      return "Snapshot '" + snapshotId + "' matches.\nApproved: " + approvedFile;
+      return "Snapshot '" + snapshotId + "' matches.\nApproved: " + approvedLocation;
     }
   }
 
   /** No approved snapshot exists; the received file was written for review. */
-  record Missing(String snapshotId, Path approvedFile, Path receivedFile)
+  record Missing(String snapshotId, ApprovedLocation approvedLocation, Path receivedFile)
       implements VerificationResult {
     public Missing {
-      validate(snapshotId, approvedFile);
+      validate(snapshotId, approvedLocation);
       Objects.requireNonNull(receivedFile, "receivedFile");
     }
 
@@ -58,7 +59,7 @@ public sealed interface VerificationResult {
       return "Missing approved snapshot '"
           + snapshotId
           + "'. Review and copy received to approved.\n"
-          + locations(approvedFile, receivedFile);
+          + locations(approvedLocation, receivedFile);
     }
   }
 
@@ -66,10 +67,11 @@ public sealed interface VerificationResult {
    * The document differs from the approved snapshot; the received file was written for review.
    * {@code differences} is the comparator's explanation of the mismatch.
    */
-  record Different(String snapshotId, Path approvedFile, Path receivedFile, String differences)
+  record Different(
+      String snapshotId, ApprovedLocation approvedLocation, Path receivedFile, String differences)
       implements VerificationResult {
     public Different {
-      validate(snapshotId, approvedFile);
+      validate(snapshotId, approvedLocation);
       Objects.requireNonNull(receivedFile, "receivedFile");
       Objects.requireNonNull(differences, "differences");
     }
@@ -81,16 +83,16 @@ public sealed interface VerificationResult {
           + "' differs: "
           + differences
           + "\n"
-          + locations(approvedFile, receivedFile);
+          + locations(approvedLocation, receivedFile);
     }
   }
 
-  private static void validate(String snapshotId, Path approvedFile) {
+  private static void validate(String snapshotId, ApprovedLocation approvedLocation) {
     Objects.requireNonNull(snapshotId, "snapshotId");
-    Objects.requireNonNull(approvedFile, "approvedFile");
+    Objects.requireNonNull(approvedLocation, "approvedLocation");
   }
 
-  private static String locations(Path approvedFile, Path receivedFile) {
-    return "Approved: " + approvedFile + "\nReceived: " + receivedFile;
+  private static String locations(ApprovedLocation approvedLocation, Path receivedFile) {
+    return "Approved: " + approvedLocation + "\nReceived: " + receivedFile;
   }
 }

@@ -1,5 +1,6 @@
 package goldstamp.core;
 
+import goldstamp.core.ApprovedSnapshots.Approved;
 import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
 import goldstamp.core.spi.SnapshotFormat;
@@ -23,8 +24,8 @@ import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
- * Verifies documents against approved snapshot files; created by {@link Verifier.Builder#build()}.
- * It compares documents and never modifies them, so {@link #verifyOwned} is the same as {@link
+ * Verifies documents against approved snapshots; created by {@link Verifier.Builder#build()}. It
+ * compares documents and never modifies them, so {@link #verifyOwned} is the same as {@link
  * #verify}. Each verification writes a {@code *.received.<ext>} file when the snapshot is missing
  * or different, and deletes a stale one when it matches. Approved files are never written.
  *
@@ -35,12 +36,12 @@ final class SnapshotVerifier<T> implements Verifier<T> {
   @FunctionalInterface
   interface Comparison<T> {
     /**
-     * Reads the approved file and compares it with {@code actual}.
+     * Reads the approved snapshot and compares it with {@code actual}.
      *
-     * @throws IOException if the approved file cannot be opened or read, including {@link
+     * @throws IOException if the approved snapshot cannot be opened or read, including {@link
      *     NoSuchFileException} when it is missing
      */
-    ComparisonResult compare(Path approved, T actual, Supplier<String> actualText)
+    ComparisonResult compare(Approved approved, T actual, Supplier<String> actualText)
         throws IOException;
   }
 
@@ -54,24 +55,26 @@ final class SnapshotVerifier<T> implements Verifier<T> {
   private static final Pattern SNAPSHOT_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
 
   /**
-   * Anything but path separators, control characters and characters Windows forbids in names; no
-   * leading dot, since the verifier adds the separating one, and no trailing space.
+   * A regex character class for one file-name character: anything but path separators, control
+   * characters and characters Windows forbids in names.
    */
-  private static final Pattern EXTENSION =
-      Pattern.compile("(?!\\.)[^\\p{Cntrl}/\\\\:*?\"<>|]*[^\\p{Cntrl}/\\\\:*?\"<>| ]");
+  static final String FILE_NAME_CHAR = "[^\\p{Cntrl}/\\\\:*?\"<>|]";
 
-  private final Path approvedDirectory;
+  /** No leading dot, since the verifier adds the separating one, and no trailing space. */
+  private static final Pattern EXTENSION = Pattern.compile("(?!\\.)" + FILE_NAME_CHAR + "+(?<! )");
+
+  private final ApprovedSnapshots approvedSnapshots;
   private final Path receivedDirectory;
   private final SnapshotFormat<T> format;
   private final Comparison<T> comparison;
   private final String extension;
 
   SnapshotVerifier(
-      Path approvedDirectory,
+      ApprovedSnapshots approvedSnapshots,
       Path receivedDirectory,
       SnapshotFormat<T> format,
       Comparison<T> comparison) {
-    this.approvedDirectory = approvedDirectory;
+    this.approvedSnapshots = approvedSnapshots;
     this.receivedDirectory = receivedDirectory;
     this.format = format;
     this.comparison = comparison;
@@ -96,30 +99,32 @@ final class SnapshotVerifier<T> implements Verifier<T> {
               + snapshotId
               + "': must be a single file name starting with a letter or digit");
     }
-    Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
-    Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
+    Approved approved = approvedSnapshots.locate(snapshotId + ".approved." + extension);
+    Path received =
+        receivedDirectory.resolve(
+            approvedSnapshots.relativeName(snapshotId + ".received." + extension));
     Memoized<String> actualText = new Memoized<>(() -> serialize(actual));
     ComparisonResult result;
     try {
       result = comparison.compare(approved, actual, actualText);
     } catch (NoSuchFileException missing) {
       writeReceived(received, actual, actualText);
-      return new VerificationResult.Missing(snapshotId, approved, received);
+      return new VerificationResult.Missing(snapshotId, approved.location(), received);
     } catch (IOException failure) {
-      throw new SnapshotException("Cannot read approved snapshot " + approved, failure);
+      throw new SnapshotException("Cannot read approved snapshot " + approved.location(), failure);
     }
     Objects.requireNonNull(result, "Comparison result");
     if (result instanceof ComparisonResult.Different different) {
       writeReceived(received, actual, actualText);
       return new VerificationResult.Different(
-          snapshotId, approved, received, different.differences());
+          snapshotId, approved.location(), received, different.differences());
     }
     try {
       Files.deleteIfExists(received);
     } catch (IOException failure) {
       throw new SnapshotException("Cannot delete stale received snapshot " + received, failure);
     }
-    return new VerificationResult.Matching(snapshotId, approved);
+    return new VerificationResult.Matching(snapshotId, approved.location());
   }
 
   private static String requireValidExtension(String extension) {
@@ -136,7 +141,17 @@ final class SnapshotVerifier<T> implements Verifier<T> {
 
   static <T> Comparison<T> textComparison(TextComparator comparator) {
     return (approved, actual, actualText) ->
-        comparator.compare(Files.readString(approved), actualText.get());
+        comparator.compare(readText(approved), actualText.get());
+  }
+
+  /** Reads strict UTF-8, rejecting malformed input as {@code Files.readString} does. */
+  private static String readText(Approved approved) throws IOException {
+    try (InputStream in = approved.open()) {
+      return StandardCharsets.UTF_8
+          .newDecoder()
+          .decode(ByteBuffer.wrap(in.readAllBytes()))
+          .toString();
+    }
   }
 
   static <T> Comparison<T> documentComparison(
@@ -144,20 +159,20 @@ final class SnapshotVerifier<T> implements Verifier<T> {
     return (approved, actual, actualText) -> {
       T approvedDocument;
       // Opening outside the parse handling lets a missing file escape as NoSuchFileException.
-      try (InputStream in = new BufferedInputStream(Files.newInputStream(approved))) {
+      try (InputStream in = new BufferedInputStream(approved.open())) {
         approvedDocument = parseApproved(format, approved, in);
       }
       return comparator.compare(approvedDocument, actual);
     };
   }
 
-  private static <T> T parseApproved(SnapshotFormat<T> format, Path approved, InputStream in) {
+  private static <T> T parseApproved(SnapshotFormat<T> format, Approved approved, InputStream in) {
     try {
       return Objects.requireNonNull(format.read(in), "Approved document");
     } catch (IOException failure) {
-      throw new SnapshotException("Cannot read approved snapshot " + approved, failure);
+      throw new SnapshotException("Cannot read approved snapshot " + approved.location(), failure);
     } catch (RuntimeException failure) {
-      throw new SnapshotException("Cannot parse approved snapshot " + approved, failure);
+      throw new SnapshotException("Cannot parse approved snapshot " + approved.location(), failure);
     }
   }
 
