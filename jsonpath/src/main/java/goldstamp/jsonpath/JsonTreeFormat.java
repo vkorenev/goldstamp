@@ -51,7 +51,7 @@ public abstract class JsonTreeFormat<T> implements SnapshotFormat<T> {
     return Mapping.unshared(this::toTree);
   }
 
-  /** Parses JSON text into a tree, as approved snapshots are read. */
+  /** Parses JSON text into a tree, as {@link #deserialize} does. */
   public final T parse(String json) {
     return deserialize(Objects.requireNonNull(json, "json"));
   }

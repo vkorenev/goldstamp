@@ -4,10 +4,18 @@ import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.DocumentComparator;
 import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.spi.TextComparator;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Objects;
@@ -26,9 +34,22 @@ final class SnapshotVerifier<T> implements Verifier<T> {
   /** Compares text or documents without round-tripping either operand through the format. */
   @FunctionalInterface
   interface Comparison<T> {
-    ComparisonResult compare(
-        Path approved, String approvedText, T actual, Supplier<String> actualText);
+    /**
+     * Reads the approved file and compares it with {@code actual}.
+     *
+     * @throws IOException if the approved file cannot be opened or read, including {@link
+     *     NoSuchFileException} when it is missing
+     */
+    ComparisonResult compare(Path approved, T actual, Supplier<String> actualText)
+        throws IOException;
   }
+
+  private static final OpenOption[] RECEIVED_OPTIONS = {
+    StandardOpenOption.CREATE,
+    StandardOpenOption.TRUNCATE_EXISTING,
+    StandardOpenOption.WRITE,
+    LinkOption.NOFOLLOW_LINKS
+  };
 
   private static final Pattern SNAPSHOT_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
 
@@ -77,21 +98,19 @@ final class SnapshotVerifier<T> implements Verifier<T> {
     }
     Path approved = approvedDirectory.resolve(snapshotId + ".approved." + extension);
     Path received = receivedDirectory.resolve(snapshotId + ".received." + extension);
-    Supplier<String> actualText = memoize(() -> serialize(actual));
-    String approvedText;
+    Memoized<String> actualText = new Memoized<>(() -> serialize(actual));
+    ComparisonResult result;
     try {
-      approvedText = Files.readString(approved);
+      result = comparison.compare(approved, actual, actualText);
     } catch (NoSuchFileException missing) {
-      writeReceived(received, actualText.get());
+      writeReceived(received, actual, actualText);
       return new VerificationResult.Missing(snapshotId, approved, received);
     } catch (IOException failure) {
       throw new SnapshotException("Cannot read approved snapshot " + approved, failure);
     }
-    ComparisonResult result =
-        Objects.requireNonNull(
-            comparison.compare(approved, approvedText, actual, actualText), "Comparison result");
+    Objects.requireNonNull(result, "Comparison result");
     if (result instanceof ComparisonResult.Different different) {
-      writeReceived(received, actualText.get());
+      writeReceived(received, actual, actualText);
       return new VerificationResult.Different(
           snapshotId, approved, received, different.differences());
     }
@@ -116,53 +135,84 @@ final class SnapshotVerifier<T> implements Verifier<T> {
   }
 
   static <T> Comparison<T> textComparison(TextComparator comparator) {
-    return (approved, approvedText, actual, actualText) ->
-        comparator.compare(approvedText, actualText.get());
+    return (approved, actual, actualText) ->
+        comparator.compare(Files.readString(approved), actualText.get());
   }
 
   static <T> Comparison<T> documentComparison(
       SnapshotFormat<T> format, DocumentComparator<? super T> comparator) {
-    return (approved, approvedText, actual, actualText) ->
-        comparator.compare(parseApproved(format, approved, approvedText), actual);
+    return (approved, actual, actualText) -> {
+      T approvedDocument;
+      // Opening outside the parse handling lets a missing file escape as NoSuchFileException.
+      try (InputStream in = new BufferedInputStream(Files.newInputStream(approved))) {
+        approvedDocument = parseApproved(format, approved, in);
+      }
+      return comparator.compare(approvedDocument, actual);
+    };
   }
 
-  private static <T> T parseApproved(SnapshotFormat<T> format, Path approved, String approvedText) {
+  private static <T> T parseApproved(SnapshotFormat<T> format, Path approved, InputStream in) {
     try {
-      return Objects.requireNonNull(format.deserialize(approvedText), "Approved document");
+      return Objects.requireNonNull(format.read(in), "Approved document");
+    } catch (IOException failure) {
+      throw new SnapshotException("Cannot read approved snapshot " + approved, failure);
     } catch (RuntimeException failure) {
       throw new SnapshotException("Cannot parse approved snapshot " + approved, failure);
     }
   }
 
   /** Computes the value on first use and reuses it. */
-  private static <V> Supplier<V> memoize(Supplier<V> supplier) {
-    return new Supplier<>() {
-      private V value;
+  private static final class Memoized<V> implements Supplier<V> {
+    private final Supplier<V> supplier;
+    private V value;
 
-      @Override
-      public V get() {
-        if (value == null) {
-          value = supplier.get();
-        }
-        return value;
+    Memoized(Supplier<V> supplier) {
+      this.supplier = supplier;
+    }
+
+    @Override
+    public V get() {
+      if (value == null) {
+        value = supplier.get();
       }
-    };
+      return value;
+    }
+
+    boolean isComputed() {
+      return value != null;
+    }
   }
 
   private String serialize(T document) {
     return Objects.requireNonNull(format.serialize(document), "Snapshot text");
   }
 
-  private static void writeReceived(Path file, String text) {
+  /** Writes text already serialized for comparison, or else streams the document. */
+  private void writeReceived(Path file, T actual, Memoized<String> actualText) {
     try {
+      // Encoded before the file is opened. A strict encoder rejects a lone surrogate, which
+      // String.getBytes would replace.
+      ByteBuffer text =
+          actualText.isComputed()
+              ? StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(actualText.get()))
+              : null;
       Files.createDirectories(file.getParent());
-      Files.writeString(
-          file,
-          text,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.TRUNCATE_EXISTING,
-          StandardOpenOption.WRITE,
-          LinkOption.NOFOLLOW_LINKS);
+      OutputStream opened = Files.newOutputStream(file, RECEIVED_OPTIONS);
+      try (OutputStream out = new BufferedOutputStream(opened)) {
+        if (text != null) {
+          out.write(text.array(), text.arrayOffset() + text.position(), text.remaining());
+        } else {
+          format.write(actual, out);
+        }
+      } catch (IOException | RuntimeException | Error failure) {
+        // Leave no partial or stale file that could be approved by mistake.
+        try {
+          Files.deleteIfExists(file);
+        } catch (IOException cleanup) {
+          failure.addSuppressed(cleanup);
+        }
+        throw failure;
+      }
     } catch (IOException failure) {
       throw new SnapshotException("Cannot write received snapshot " + file, failure);
     }

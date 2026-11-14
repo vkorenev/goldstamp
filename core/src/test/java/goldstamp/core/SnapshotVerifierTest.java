@@ -12,6 +12,7 @@ import goldstamp.core.spi.Mapping;
 import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.text.TextFormat;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -381,6 +382,26 @@ class SnapshotVerifierTest {
         assertThrows(SnapshotException.class, () -> unwritable.verify("missing", "x"));
     assertThat(failure.getMessage(), containsString("received snapshot"));
     assertInstanceOf(IOException.class, failure.getCause());
+  }
+
+  @Test
+  void formatFailureWhileWritingTheReceivedFileFailsVerificationAndDeletesIt() throws IOException {
+    var failing =
+        new NormalizingTextFormat() {
+          @Override
+          public void write(String document, OutputStream out) throws IOException {
+            out.write('p'); // Partial output that must not survive.
+            throw new IllegalStateException("format failed");
+          }
+        };
+    var streaming =
+        Verifier.builder(failing).approvedDirectory(directory).receivedDirectory(directory).build();
+    Path received = directory.resolve("x.received.txt");
+    Files.writeString(received, "stale");
+
+    var failure = assertThrows(IllegalStateException.class, () -> streaming.verify("x", "x"));
+    assertEquals("format failed", failure.getMessage());
+    assertFalse(Files.exists(received));
   }
 
   @Test
