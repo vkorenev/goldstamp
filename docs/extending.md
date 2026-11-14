@@ -69,6 +69,11 @@ Implement `SnapshotFormat<T>` directly:
 | `extension()` | A file suffix such as `yaml` or `tar.gz`, with no leading dot. It is validated when the verifier is built. |
 | `serialize(T)` | Returns the snapshot text. |
 | `deserialize(String)` | Reads your own output and equivalent hand-edited text. |
+| `write(T, OutputStream)`, `read(InputStream)` | Optional. Stream the snapshot instead of building a `String`. Default to UTF-8 over `serialize` and `deserialize`. |
+
+Override the streaming methods for large snapshots. They must write the same content as
+`serialize` and must not close the stream. The default text comparison still reads both
+snapshots as `String`s; document comparison and missing snapshots don't.
 
 For a minimal example, see
 [`TextFormat`](../core/src/main/java/goldstamp/core/text/TextFormat.java). Implementations

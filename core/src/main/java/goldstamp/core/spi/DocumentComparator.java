@@ -13,7 +13,7 @@ public interface DocumentComparator<T> {
   /**
    * Compares the two documents.
    *
-   * @param approved the approved file's text, parsed by {@link SnapshotFormat#deserialize}
+   * @param approved the approved file, read by {@link SnapshotFormat#read(java.io.InputStream)}
    * @param actual the transformed incoming document
    */
   ComparisonResult compare(T approved, T actual);

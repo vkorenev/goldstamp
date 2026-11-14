@@ -12,6 +12,7 @@ import com.jayway.jsonpath.PathNotFoundException;
 import goldstamp.core.SnapshotException;
 import goldstamp.core.VerificationResult;
 import goldstamp.core.Verifier;
+import goldstamp.core.spi.ComparisonResult;
 import goldstamp.core.spi.Mapping;
 import goldstamp.jsonpath.JsonRule;
 import java.io.IOException;
@@ -113,6 +114,52 @@ class SnapshotWorkflowTest {
     assertEquals(approved, Files.readString(missing.approvedFile()));
     ordersVerifier.assertMatches("orders", json(input));
     assertFalse(Files.exists(missing.receivedFile()));
+  }
+
+  /** A verifier comparing parsed documents with {@code equals}. */
+  private Verifier<JsonNode> documentVerifier() {
+    return JSON.verifier()
+        .approvedDirectory(directory.resolve("approved"))
+        .receivedDirectory(directory.resolve("received"))
+        .documentComparator(
+            (approved, actual) ->
+                approved.equals(actual)
+                    ? ComparisonResult.matching()
+                    : ComparisonResult.different("documents differ"))
+        .build();
+  }
+
+  @Test
+  void documentComparisonStreamsTheApprovalAndTheReceivedSnapshot() throws IOException {
+    var documents = documentVerifier();
+    JsonNode input =
+        json(
+            """
+        {"b": [1, 2], "a": "café ✓ 😀"}""");
+
+    var missing = missing(documents.verify("doc", input));
+    assertEquals(input, json(Files.readString(missing.receivedFile())));
+    approve(missing);
+    assertInstanceOf(VerificationResult.Matching.class, documents.verify("doc", input));
+
+    JsonNode changed =
+        json(
+            """
+        {"b": [1, 3], "a": "café ✓ 😀"}""");
+    var different =
+        assertInstanceOf(VerificationResult.Different.class, documents.verify("doc", changed));
+    assertEquals(changed, json(Files.readString(different.receivedFile())));
+  }
+
+  @Test
+  void jacksonIoFailureReadingTheApprovalIsAReadFailureNotAParseFailure() throws IOException {
+    // On Linux a directory opens as a stream, and only Jackson's read fails.
+    Files.createDirectories(directory.resolve("approved/dir.approved.json"));
+
+    SnapshotException failure =
+        assertThrows(SnapshotException.class, () -> documentVerifier().verify("dir", json("{}")));
+    assertThat(failure.getMessage(), containsString("Cannot read approved snapshot"));
+    assertInstanceOf(IOException.class, failure.getCause());
   }
 
   @ParameterizedTest

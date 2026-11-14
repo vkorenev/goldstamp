@@ -3,12 +3,20 @@ package goldstamp.jackson3.json;
 import com.jayway.jsonpath.spi.json.Jackson3JsonNodeJsonProvider;
 import com.jayway.jsonpath.spi.mapper.Jackson3MappingProvider;
 import goldstamp.jsonpath.JsonTreeFormat;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Objects;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.core.StreamWriteFeature;
+import tools.jackson.core.exc.JacksonIOException;
 import tools.jackson.core.util.DefaultIndenter;
 import tools.jackson.core.util.DefaultPrettyPrinter;
 import tools.jackson.core.util.Separators;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectReader;
+import tools.jackson.databind.ObjectWriter;
 import tools.jackson.databind.cfg.JsonNodeFeature;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.NullNode;
@@ -77,13 +85,43 @@ public final class JacksonJson extends JsonTreeFormat<JsonNode> {
 
   @Override
   public String serialize(JsonNode document) {
-    return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(requireValue(document))
-        + "\n";
+    return prettyWriter().writeValueAsString(requireValue(document)) + "\n";
   }
 
   @Override
   public JsonNode deserialize(String snapshot) {
-    JsonNode node = mapper.readTree(snapshot);
+    return requireDocument(mapper.readTree(snapshot));
+  }
+
+  @Override
+  public void write(JsonNode document, OutputStream out) throws IOException {
+    try {
+      prettyWriter().writeValue(out, requireValue(document));
+    } catch (JacksonIOException failure) {
+      throw failure.getCause();
+    }
+    out.write('\n');
+  }
+
+  @Override
+  public JsonNode read(InputStream in) throws IOException {
+    try {
+      return requireDocument(streamReader().readTree(in));
+    } catch (JacksonIOException failure) {
+      throw failure.getCause();
+    }
+  }
+
+  // Never closes the target, so the trailing newline can follow.
+  private ObjectWriter prettyWriter() {
+    return mapper.writerWithDefaultPrettyPrinter().without(StreamWriteFeature.AUTO_CLOSE_TARGET);
+  }
+
+  private ObjectReader streamReader() {
+    return mapper.reader().without(StreamReadFeature.AUTO_CLOSE_SOURCE);
+  }
+
+  private static JsonNode requireDocument(JsonNode node) {
     if (node == null || node.isMissingNode()) {
       throw new IllegalArgumentException("Expected a JSON value, but the text is empty");
     }
