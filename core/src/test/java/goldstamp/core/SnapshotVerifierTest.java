@@ -13,6 +13,8 @@ import goldstamp.core.spi.SnapshotFormat;
 import goldstamp.core.text.TextFormat;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -45,9 +48,14 @@ class SnapshotVerifierTest {
               ? ComparisonResult.matching()
               : ComparisonResult.different("documents differ");
 
+  /** The approved file of a directory-mode result. */
+  private static Path approvedFile(VerificationResult result) {
+    return assertInstanceOf(ApprovedLocation.File.class, result.approvedLocation()).path();
+  }
+
   /** Approves the received output, as a developer would after reviewing it. */
   private static void approve(VerificationResult.Missing missing) throws IOException {
-    Files.copy(missing.receivedFile(), missing.approvedFile());
+    Files.copy(missing.receivedFile(), approvedFile(missing));
   }
 
   private final NormalizingTextFormat normalizing = new NormalizingTextFormat();
@@ -99,7 +107,7 @@ class SnapshotVerifierTest {
         assertInstanceOf(
             VerificationResult.Missing.class, transforming.verify("greeting", "Hello"));
     assertEquals("hello!", Files.readString(missing.receivedFile()));
-    assertFalse(Files.exists(missing.approvedFile()));
+    assertFalse(Files.exists(approvedFile(missing)));
 
     // Approve the received output. The transformation ran on the incoming document only, so a
     // matching result also proves it was not applied again to the approved text.
@@ -110,7 +118,89 @@ class SnapshotVerifierTest {
     assertInstanceOf(
         VerificationResult.Different.class, transforming.verify("greeting", "goodbye"));
     assertEquals("goodbye!", Files.readString(missing.receivedFile()));
-    assertEquals("hello!", Files.readString(missing.approvedFile()));
+    assertEquals("hello!", Files.readString(approvedFile(missing)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void classpathApprovalsAreApprovedByCopyingTheMirroredReceivedFileBack(boolean compareDocuments)
+      throws IOException {
+    Path resources = Files.createDirectories(directory.resolve("resources"));
+    Path receivedRoot = directory.resolve("received");
+    try (var loader = new URLClassLoader(new URL[] {resources.toUri().toURL()}, null)) {
+      builder.approvedResources(loader, "com/example").receivedDirectory(receivedRoot);
+      if (compareDocuments) {
+        builder.documentComparator(EQUAL_DOCUMENTS);
+      }
+      var classpath = builder.build();
+
+      var missing =
+          assertInstanceOf(VerificationResult.Missing.class, classpath.verify("greeting", "hi"));
+      assertEquals(
+          receivedRoot.resolve("com/example/greeting.received.txt"), missing.receivedFile());
+      assertThat(
+          missing.diagnostic(), containsString("classpath:com/example/greeting.approved.txt"));
+
+      // Approve: copy to the same relative path in the resource tree, renamed.
+      Path approved = resources.resolve("com/example/greeting.approved.txt");
+      Files.createDirectories(approved.getParent());
+      Files.copy(missing.receivedFile(), approved);
+      assertInstanceOf(VerificationResult.Matching.class, classpath.verify("greeting", "hi"));
+      assertFalse(Files.exists(missing.receivedFile()));
+
+      // A Different result names the copy that was read, in case another one shadows it.
+      var different =
+          assertInstanceOf(VerificationResult.Different.class, classpath.verify("greeting", "bye"));
+      assertEquals("bye", Files.readString(missing.receivedFile()));
+      var resource =
+          assertInstanceOf(ApprovedLocation.Resource.class, different.approvedLocation());
+      assertEquals(approved, Path.of(resource.source()));
+      assertThat(different.diagnostic(), containsString(resource.source().toString()));
+    }
+  }
+
+  @Test
+  void anchorClassReadsApprovalsFromItsPackageOnTheClasspath() {
+    var result =
+        builder
+            .approvedResources(SnapshotVerifierTest.class)
+            .build()
+            .verify("anchored", "anchored");
+    assertEquals(
+        "goldstamp/core/anchored.approved.txt",
+        assertInstanceOf(ApprovedLocation.Resource.class, result.approvedLocation()).name());
+    result.assertMatches();
+  }
+
+  @ParameterizedTest
+  @CsvSource(
+      delimiter = '|',
+      textBlock =
+          """
+          ''                    | x.approved.txt
+          snapshots/web/        | snapshots/web/x.approved.txt
+          com/example/_internal | com/example/_internal/x.approved.txt
+          /abs                  |
+          a/../b                |
+          a\\b                  |
+          foo.                  |
+          """)
+  void resourceDirectoryMustNameTheSameLocationOnTheClasspathAndOnDisk(
+      String resourceDirectory, String resourceName) {
+    ClassLoader loader = getClass().getClassLoader();
+    if (resourceName != null) {
+      var result = builder.approvedResources(loader, resourceDirectory).build().verify("x", "x");
+      assertEquals(
+          resourceName,
+          assertInstanceOf(ApprovedLocation.Resource.class, result.approvedLocation()).name());
+      assertEquals(
+          directory.resolve(resourceName.replace(".approved.", ".received.")),
+          assertInstanceOf(VerificationResult.Missing.class, result).receivedFile());
+    } else {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> builder.approvedResources(loader, resourceDirectory));
+    }
   }
 
   @Test
@@ -404,15 +494,22 @@ class SnapshotVerifierTest {
     assertFalse(Files.exists(received));
   }
 
-  @Test
-  void approvedFileReadFailureIsReportedWithSnapshotContext() throws IOException {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void approvedFileReadFailureIsReportedWithSnapshotContext(boolean classpath) throws IOException {
     Files.createDirectories(
         directory.resolve("unreadable.approved.txt")); // A directory, not a file.
+    try (var loader = new URLClassLoader(new URL[] {directory.toUri().toURL()}, null)) {
+      if (classpath) {
+        builder.approvedResources(loader, "");
+      }
+      var unreadable = builder.build();
 
-    SnapshotException failure =
-        assertThrows(SnapshotException.class, () -> verifier.verify("unreadable", "x"));
-    assertThat(failure.getMessage(), containsString("approved snapshot"));
-    assertInstanceOf(IOException.class, failure.getCause());
+      SnapshotException failure =
+          assertThrows(SnapshotException.class, () -> unreadable.verify("unreadable", "x"));
+      assertThat(failure.getMessage(), containsString("approved snapshot"));
+      assertInstanceOf(IOException.class, failure.getCause());
+    }
   }
 
   @Test

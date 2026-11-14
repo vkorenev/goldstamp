@@ -4,6 +4,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.endsWith;
 import static org.junit.jupiter.api.Assertions.*;
 
+import goldstamp.core.ApprovedLocation;
 import goldstamp.core.VerificationResult;
 import goldstamp.core.spi.Mapping;
 import java.io.IOException;
@@ -33,7 +34,9 @@ class TextFormatTest {
     assertThat(missing.receivedFile().getFileName().toString(), endsWith(".received.log"));
     assertEquals("Hello\n  World", Files.readString(missing.receivedFile()));
 
-    Files.copy(missing.receivedFile(), missing.approvedFile());
+    Files.copy(
+        missing.receivedFile(),
+        assertInstanceOf(ApprovedLocation.File.class, missing.approvedLocation()).path());
     assertInstanceOf(VerificationResult.Matching.class, verifier.verify("run", "Hello\n  World"));
     assertFalse(Files.exists(missing.receivedFile()));
 

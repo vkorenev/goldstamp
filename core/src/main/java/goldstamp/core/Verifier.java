@@ -11,11 +11,11 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Verifies inputs of type {@code I} against approved snapshot files. Start with {@link #builder},
- * then derive others by prepending transformations: {@link #prependTransformation} adapts another
- * input type, and {@link #prependTransformations} cleans up inputs of the same type. Derived
- * verifiers leave this one unchanged. Concurrent verifications require distinct snapshot IDs and
- * thread-safe formats, transformations and comparators.
+ * Verifies inputs of type {@code I} against approved snapshots. Start with {@link #builder}, then
+ * derive others by prepending transformations: {@link #prependTransformation} adapts another input
+ * type, and {@link #prependTransformations} cleans up inputs of the same type. Derived verifiers
+ * leave this one unchanged. Concurrent verifications require distinct snapshot IDs and thread-safe
+ * formats, transformations and comparators.
  *
  * <p>Every verification writes a {@code *.received.<ext>} file when the snapshot is missing or
  * different, and deletes a stale one when it matches. Approved files are never written.
@@ -139,7 +139,8 @@ public interface Verifier<I> {
    */
   final class Builder<T> {
     private final SnapshotFormat<T> format;
-    private Path approvedDirectory = Path.of("src/test/snapshots/approved");
+    private ApprovedSnapshots approvedSnapshots =
+        new ApprovedSnapshots.Directory(Path.of("src/test/snapshots/approved"));
     private Path receivedDirectory = Path.of("build/snapshots/received");
     private List<Mapping<T, T>> transformations = List.of();
     private SnapshotVerifier.Comparison<T> comparison =
@@ -149,9 +150,42 @@ public interface Verifier<I> {
       this.format = Objects.requireNonNull(format, "format");
     }
 
-    /** Where manually approved snapshots live. GoldStamp never writes here. */
+    /**
+     * Where manually approved snapshots live. GoldStamp never writes here. Replaces any earlier
+     * approved location.
+     */
     public Builder<T> approvedDirectory(Path directory) {
-      this.approvedDirectory = Objects.requireNonNull(directory, "directory");
+      this.approvedSnapshots = new ApprovedSnapshots.Directory(directory);
+      return this;
+    }
+
+    /**
+     * Reads approved snapshots as classpath resources in {@code anchor}'s package, through its
+     * class loader. As {@link #approvedResources(ClassLoader, String)} with the package path as the
+     * directory.
+     *
+     * @throws IllegalArgumentException if {@code anchor} has no class loader
+     */
+    public Builder<T> approvedResources(Class<?> anchor) {
+      ClassLoader loader = Objects.requireNonNull(anchor, "anchor").getClassLoader();
+      if (loader == null) {
+        throw new IllegalArgumentException("Class " + anchor.getName() + " has no class loader");
+      }
+      return approvedResources(loader, anchor.getPackageName().replace('.', '/'));
+    }
+
+    /**
+     * Reads approved snapshots as resources of {@code loader} under {@code directory}, a
+     * slash-separated resource path such as {@code "com/example"}; empty means the root, and a
+     * trailing slash is ignored. Received files mirror the resource path under the received
+     * directory. Replaces any earlier approved location.
+     *
+     * @throws IllegalArgumentException if {@code directory} starts with {@code /}, has an empty,
+     *     {@code .} or {@code ..} segment, a segment ending in a dot or space, or a backslash,
+     *     control character or any of {@code : * ? " < > |}
+     */
+    public Builder<T> approvedResources(ClassLoader loader, String directory) {
+      this.approvedSnapshots = new ApprovedSnapshots.Resources(loader, directory);
       return this;
     }
 
@@ -203,10 +237,7 @@ public interface Verifier<I> {
      */
     public Verifier<T> build() {
       return new SnapshotVerifier<>(
-              approvedDirectory.toAbsolutePath().normalize(),
-              receivedDirectory.toAbsolutePath().normalize(),
-              format,
-              comparison)
+              approvedSnapshots, receivedDirectory.toAbsolutePath().normalize(), format, comparison)
           .prependTransformations(transformations);
     }
   }

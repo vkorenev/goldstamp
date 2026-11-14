@@ -23,6 +23,15 @@ var orders = base.prependTransformation(json.sort("$.items", "id"));  // runs be
 ```
 
 - **Directories** are resolved against the working directory.
+- **Approvals on the classpath:** `.approvedResources(OrderTest.class)` reads
+  `<package path>/<id>.approved.json` through the test's class loader, so finding approvals
+  doesn't depend on the working directory. Received files still do: they go to
+  `<received directory>/<package path>/<id>.received.json`. To approve, copy one to
+  `src/test/resources/<package path>/<id>.approved.json`.
+  - `.approvedResources(loader, "snapshots/web")` picks the loader and resource directory.
+  - If two classpath entries hold the same resource, the first wins. A Different result
+    shows which one was read.
+  - Tests on the module path must open their package, or every approval stays missing.
 - **Snapshot IDs** become file names: `<id>.approved.json` and `<id>.received.json`. An ID
   is letters, digits, `.`, `_` and `-`, and must start with a letter or digit.
 - **Concurrent tests** must use distinct IDs.
@@ -31,7 +40,8 @@ var orders = base.prependTransformation(json.sort("$.items", "id"));  // runs be
 - **`assertMatches`** throws `AssertionError` on a missing or different snapshot.
 - **`verify`** returns a `VerificationResult`, which is one of `Matching`, `Missing` or
   `Different`:
-  - Every result has `matches()`, `diagnostic()` and `assertMatches()`.
+  - Every result has `matches()`, `diagnostic()`, `assertMatches()` and `approvedLocation()`,
+    which is an `ApprovedLocation.File` or an `ApprovedLocation.Resource`.
   - `Missing` and `Different` also have `receivedFile()`.
 - **On a match**, any stale received file is deleted.
 

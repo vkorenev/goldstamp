@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.jayway.jsonpath.PathNotFoundException;
+import goldstamp.core.ApprovedLocation;
 import goldstamp.core.SnapshotException;
 import goldstamp.core.VerificationResult;
 import goldstamp.core.Verifier;
@@ -68,8 +69,10 @@ class SnapshotWorkflowTest {
 
   /** Approves the received output, as a developer would after reviewing it. */
   private static void approve(VerificationResult.Missing missing) throws IOException {
-    Files.createDirectories(missing.approvedFile().getParent());
-    Files.copy(missing.receivedFile(), missing.approvedFile());
+    Path approved =
+        assertInstanceOf(ApprovedLocation.File.class, missing.approvedLocation()).path();
+    Files.createDirectories(approved.getParent());
+    Files.copy(missing.receivedFile(), approved);
   }
 
   /** Asserts that the snapshot written for a missing approval holds {@code expected}. */
@@ -87,18 +90,19 @@ class SnapshotWorkflowTest {
         """
         {"timestamp": 123, "items": [{"id": 2}, {"id": 1}]}""";
     var missing = missing(ordersVerifier.verify("orders", json(input)));
-    assertEquals(directory.resolve("approved/orders.approved.json"), missing.approvedFile());
+    Path approvedFile = directory.resolve("approved/orders.approved.json");
+    assertEquals(new ApprovedLocation.File(approvedFile), missing.approvedLocation());
     assertEquals(directory.resolve("received/orders.received.json"), missing.receivedFile());
-    assertFalse(Files.exists(missing.approvedFile()));
+    assertFalse(Files.exists(approvedFile));
     assertThat(Files.readString(missing.receivedFile()), not(containsString("timestamp")));
     AssertionError failure =
         assertThrows(
             AssertionError.class, () -> ordersVerifier.assertMatches("orders", json(input)));
-    assertThat(failure.getMessage(), containsString(missing.approvedFile().toString()));
+    assertThat(failure.getMessage(), containsString(missing.approvedLocation().toString()));
     assertThat(failure.getMessage(), containsString(missing.receivedFile().toString()));
 
     approve(missing);
-    String approved = Files.readString(missing.approvedFile());
+    String approved = Files.readString(approvedFile);
     assertInstanceOf(
         VerificationResult.Matching.class, ordersVerifier.verify("orders", json(input)));
     assertFalse(Files.exists(missing.receivedFile()));
@@ -111,7 +115,7 @@ class SnapshotWorkflowTest {
             VerificationResult.Different.class, ordersVerifier.verify("orders", json(changed)));
     assertThat(different.differences(), containsString("\"id\": 3"));
     assertTrue(Files.exists(different.receivedFile()));
-    assertEquals(approved, Files.readString(missing.approvedFile()));
+    assertEquals(approved, Files.readString(approvedFile));
     ordersVerifier.assertMatches("orders", json(input));
     assertFalse(Files.exists(missing.receivedFile()));
   }
